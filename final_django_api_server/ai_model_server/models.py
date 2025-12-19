@@ -1,20 +1,19 @@
 # ai_model_server/models.py
 from django.db import models
+from .fields import VectorField
 
 
 class RadioFeatureVector(models.Model):
     """CT 영상 특징 벡터"""
     
     radio_vector_id = models.AutoField(primary_key=True)
-    series_uid = models.CharField(max_length=64)
     extraction_model = models.CharField(max_length=20, blank=True, null=True)
     model_version = models.CharField(max_length=20, blank=True, null=True)
     vector_dim = models.IntegerField(default=2048)
-    feature_vector = models.BinaryField(blank=True, null=True)
+    feature_vector = VectorField(dimensions=2048, blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-    run_id = models.IntegerField()
-    
+
     series = models.ForeignKey('radiology.DICOMSeries', on_delete=models.CASCADE, to_field='series_uid', db_column='series_uid')
     run = models.ForeignKey('radiology.RadiologyAIRun', on_delete=models.CASCADE, db_column='run_id')
     
@@ -28,7 +27,6 @@ class ClinicalFeatureVector(models.Model):
     """임상 데이터 특징 벡터"""
     
     clinical_vector_id = models.AutoField(primary_key=True)
-    encounter_id = models.IntegerField()
     includes_lab = models.BooleanField(default=False)
     includes_diagnosis = models.BooleanField(default=False)
     includes_vital = models.BooleanField(default=False)
@@ -36,11 +34,11 @@ class ClinicalFeatureVector(models.Model):
     extraction_model = models.CharField(max_length=20, blank=True, null=True)
     model_version = models.CharField(max_length=20, blank=True, null=True)
     vector_dim = models.IntegerField(default=128)
-    feature_vector = models.BinaryField(blank=True, null=True)
+    feature_vector = VectorField(dimensions=128, blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-    
-    encounter = models.ForeignKey('patients.Encounter', on_delete=models.CASCADE, db_column='encounter_id')
+
+    encounter = models.ForeignKey('doctor.Encounter', on_delete=models.CASCADE, db_column='encounter_id')
     
     class Meta:
         db_table = 'hospital"."clinical_feature_vectors'
@@ -52,17 +50,16 @@ class GenomicFeatureVector(models.Model):
     """유전체 특징 벡터"""
     
     genomic_vector_id = models.AutoField(primary_key=True)
-    genomic_id = models.IntegerField()
     ssgsea_version = models.CharField(max_length=20, blank=True, null=True)
     pathway_count = models.IntegerField(blank=True, null=True)
     extraction_model = models.CharField(max_length=20, blank=True, null=True)
     model_version = models.CharField(max_length=20, blank=True, null=True)
     vector_dim = models.IntegerField(default=512)
-    feature_vector = models.BinaryField(blank=True, null=True)
+    feature_vector = VectorField(dimensions=512, blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-    
-    genomic = models.ForeignKey('patients.GenomicData', on_delete=models.CASCADE, db_column='genomic_id')
+
+    genomic = models.ForeignKey('doctor.GenomicData', on_delete=models.CASCADE, db_column='genomic_id')
     
     class Meta:
         db_table = 'hospital"."genomic_feature_vectors'
@@ -87,12 +84,7 @@ class AIAnalysisResult(models.Model):
     ]
     
     result_id = models.AutoField(primary_key=True)
-    patient_id = models.CharField(max_length=50)
-    encounter_id = models.IntegerField()
     task_type = models.CharField(max_length=30)
-    imaging_vector_id = models.IntegerField(blank=True, null=True)
-    clinical_vector_id = models.IntegerField(blank=True, null=True)
-    genomic_vector_id = models.IntegerField(blank=True, null=True)
     model_name = models.CharField(max_length=100)
     model_version = models.CharField(max_length=20)
     model_config = models.JSONField(blank=True, null=True)
@@ -110,9 +102,9 @@ class AIAnalysisResult(models.Model):
     started_at = models.DateTimeField(blank=True, null=True)
     completed_at = models.DateTimeField(blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
-    
-    patient = models.ForeignKey('patients.Patient', on_delete=models.CASCADE, to_field='patient_id', db_column='patient_id')
-    encounter = models.ForeignKey('patients.Encounter', on_delete=models.CASCADE, db_column='encounter_id')
+
+    patient = models.ForeignKey('doctor.Patient', on_delete=models.CASCADE, to_field='patient_id', db_column='patient_id')
+    encounter = models.ForeignKey('doctor.Encounter', on_delete=models.CASCADE, db_column='encounter_id')
     imaging_vector = models.ForeignKey(RadioFeatureVector, on_delete=models.SET_NULL, null=True, blank=True, db_column='imaging_vector_id')
     clinical_vector = models.ForeignKey(ClinicalFeatureVector, on_delete=models.SET_NULL, null=True, blank=True, db_column='clinical_vector_id')
     genomic_vector = models.ForeignKey(GenomicFeatureVector, on_delete=models.SET_NULL, null=True, blank=True, db_column='genomic_vector_id')

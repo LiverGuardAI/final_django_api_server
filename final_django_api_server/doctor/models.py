@@ -277,20 +277,19 @@ class Prescription(models.Model):
         
 class ImagingOrder(models.Model):
     """영상 검사 처방"""
-    
+
     order_id = models.AutoField(primary_key=True)
-    encounter_id = models.IntegerField()
     modality = models.CharField(max_length=16)
     body_part = models.CharField(max_length=64, blank=True, null=True)
     order_notes = models.TextField(blank=True, null=True)
     priority = models.CharField(max_length=10, default='ROUTINE')
-    
+
     status = models.CharField(max_length=20, default='REQUESTED')
-    
+
     ordered_at = models.DateTimeField(auto_now_add=True)
     scheduled_at = models.DateTimeField(blank=True, null=True)
     study_uid = models.CharField(max_length=64, blank=True, null=True)
-    
+
     patient = models.ForeignKey('Patient', on_delete=models.CASCADE, db_column='patient_id')
     encounter = models.ForeignKey('Encounter', on_delete=models.CASCADE, db_column='encounter_id')
     doctor = models.ForeignKey('Doctor', on_delete=models.RESTRICT, db_column='doctor_id')
