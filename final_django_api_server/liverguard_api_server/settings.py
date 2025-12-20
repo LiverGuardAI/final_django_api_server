@@ -84,7 +84,7 @@ WSGI_APPLICATION = 'liverguard_api_server.wsgi.application'
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.postgresql',
-        'NAME': os.environ.get('POSTGRES_DB', 'postgres'),
+        'NAME': os.environ.get('POSTGRES_DB', 'liverguard_db'),
         'USER': os.environ.get('POSTGRES_USER', 'postgres'),
         'PASSWORD': os.environ.get('POSTGRES_PASSWORD', 'postgres1234'),
         'HOST': os.environ.get('POSTGRES_HOST', '34.67.62.238'),
