@@ -4,6 +4,8 @@
 > Access/Refresh/Service 3종 토큰을 안전하게 적용한다.
 
 ---
+# settings.py cors 주소 변경 필요 
+
 
 ## 0단계: 인증 경계 + 토큰 정책을 먼저 고정
 

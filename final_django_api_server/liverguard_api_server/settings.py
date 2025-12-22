@@ -46,9 +46,13 @@ INSTALLED_APPS = [
     'radiology',
     'patients',
     'ai_model_server',
+    'rest_framework',
+    'rest_framework_simplejwt',
+    'corsheaders',
 ]
 
 MIDDLEWARE = [
+    'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -116,7 +120,37 @@ AUTH_PASSWORD_VALIDATORS = [
     },
 ]
 
+# JWT 및 CORS 설정
+# CORS 설정
+CORS_ALLOWED_ORIGINS = [
+    "http://localhost:5173",  # 변경 필요
+    "http://localhost:3000",  # 변경 필요
+]
+CORS_ALLOW_CREDENTIALS = True  # 쿠키 전송 허용
 
+# REST Framework 설정
+REST_FRAMEWORK = {
+    'DEFAULT_AUTHENTICATION_CLASSES': [
+        'rest_framework_simplejwt.authentication.JWTAuthentication',
+    ],
+    'DEFAULT_PERMISSION_CLASSES': [
+        'rest_framework.permissions.IsAuthenticated',
+    ],
+}
+
+# Simple JWT 설정
+from datetime import timedelta
+
+SIMPLE_JWT = {
+    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=10),   # Access 토큰: 10분
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=7),      # Refresh 토큰: 7일
+    
+    'ROTATE_REFRESH_TOKENS': False,    # Refresh 토큰 회전 (보안 강화)
+    'BLACKLIST_AFTER_ROTATION': False, # 사용한 Refresh 토큰 블랙리스트 등록
+    
+    'AUTH_HEADER_TYPES': ('Bearer',), # Authorization: Bearer <token>
+    'AUTH_TOKEN_CLASSES': ('rest_framework_simplejwt.tokens.AccessToken',),
+}
 # Internationalization
 # https://docs.djangoproject.com/en/5.2/topics/i18n/
 
@@ -138,3 +172,4 @@ STATIC_URL = 'static/'
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
