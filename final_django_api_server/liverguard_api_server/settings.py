@@ -123,8 +123,8 @@ AUTH_PASSWORD_VALIDATORS = [
 # JWT 및 CORS 설정
 # CORS 설정
 CORS_ALLOWED_ORIGINS = [
-    "http://localhost:5173",  # 변경 필요
-    "http://localhost:3000",  # 변경 필요
+    "http://34.67.62.238:5173",  # 변경 필요
+    "http://34.67.62.238:3000",  # 변경 필요
 ]
 CORS_ALLOW_CREDENTIALS = True  # 쿠키 전송 허용
 
