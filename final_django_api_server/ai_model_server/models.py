@@ -1,6 +1,7 @@
 # ai_model_server/models.py
 from django.db import models
 from .fields import VectorField
+from accounts.fields import StatusField, RiskGroupField
 
 
 class RadioFeatureVector(models.Model):
@@ -69,20 +70,7 @@ class GenomicFeatureVector(models.Model):
 
 class AIAnalysisResult(models.Model):
     """통합 AI 분석 결과"""
-    
-    STATUS_CHOICES = [
-        ('PENDING', '대기'),
-        ('RUNNING', '실행중'),
-        ('COMPLETED', '완료'),
-        ('FAILED', '실패'),
-    ]
-    
-    RISK_GROUP_CHOICES = [
-        ('LOW', '저위험'),
-        ('MEDIUM', '중위험'),
-        ('HIGH', '고위험'),
-    ]
-    
+
     result_id = models.AutoField(primary_key=True)
     task_type = models.CharField(max_length=30)
     model_name = models.CharField(max_length=100)
@@ -92,12 +80,12 @@ class AIAnalysisResult(models.Model):
     confidence_scores = models.JSONField(blank=True, null=True)
     probabilities = models.JSONField(blank=True, null=True)
     risk_score = models.DecimalField(max_digits=8, decimal_places=4, blank=True, null=True)
-    risk_group = models.CharField(max_length=10, choices=RISK_GROUP_CHOICES, blank=True, null=True)
+    risk_group = RiskGroupField(blank=True, null=True)
     risk_factors = models.JSONField(blank=True, null=True)
     feature_importance = models.JSONField(blank=True, null=True)
     shap_values = models.JSONField(blank=True, null=True)
     explanation = models.TextField(blank=True, null=True)
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES)
+    status = StatusField()
     error_message = models.TextField(blank=True, null=True)
     started_at = models.DateTimeField(blank=True, null=True)
     completed_at = models.DateTimeField(blank=True, null=True)

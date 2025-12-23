@@ -1,5 +1,6 @@
 # patients/models.py - LiverGuard 앱 관련
 from django.db import models
+from accounts.fields import GenderField, ScheduleTypeField, MealTimingField, MedicationStatusField
 
 
 class UserProfile(models.Model):
@@ -8,7 +9,7 @@ class UserProfile(models.Model):
     profile_id = models.BigAutoField(primary_key=True)
     nickname = models.CharField(max_length=20)
     birth_date = models.DateField(blank=True, null=True)
-    gender = models.CharField(max_length=10, blank=True, null=True)
+    gender = GenderField(blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     user_id = models.BigIntegerField()
@@ -187,28 +188,15 @@ class DURContraindication(models.Model):
 
 class MedicationSchedule(models.Model):
     """복약 일정 관리"""
-    
-    SCHEDULE_TYPE_CHOICES = [
-        ('DAILY', '매일'),
-        ('WEEKLY', '주간'),
-        ('AS_NEEDED', '필요시'),
-    ]
-    
-    MEAL_TIMING_CHOICES = [
-        ('BEFORE_MEAL', '식전'),
-        ('AFTER_MEAL', '식후'),
-        ('WITH_MEAL', '식사중'),
-        ('ANYTIME', '아무때나'),
-    ]
-    
+
     schedule_id = models.BigAutoField(primary_key=True)
-    schedule_type = models.CharField(max_length=20, choices=SCHEDULE_TYPE_CHOICES, blank=True, null=True)
+    schedule_type = ScheduleTypeField(blank=True, null=True)
     times_per_day = models.IntegerField(blank=True, null=True)
     time_slots = models.JSONField(blank=True, null=True)
     start_date = models.DateField()
     end_date = models.DateField(blank=True, null=True)
     total_days = models.IntegerField(blank=True, null=True)
-    meal_timing = models.CharField(max_length=20, choices=MEAL_TIMING_CHOICES, blank=True, null=True)
+    meal_timing = MealTimingField(blank=True, null=True)
     reminder_enabled = models.BooleanField(default=True)
     reminder_advance_minutes = models.IntegerField(default=30)
     is_active = models.BooleanField(default=True)
@@ -226,19 +214,12 @@ class MedicationSchedule(models.Model):
 
 class MedicationLog(models.Model):
     """복약 기록"""
-    
-    STATUS_CHOICES = [
-        ('PENDING', '대기'),
-        ('TAKEN', '복용완료'),
-        ('SKIPPED', '건너뜀'),
-        ('MISSED', '놓침'),
-    ]
-    
+
     log_id = models.BigAutoField(primary_key=True)
     scheduled_date = models.DateField()
     scheduled_time = models.TimeField()
     taken_at = models.DateTimeField(blank=True, null=True)
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES)
+    status = MedicationStatusField()
     skip_reason = models.TextField(blank=True, null=True)
     scheduled_dosage = models.CharField(max_length=50, blank=True, null=True)
     actual_dosage = models.CharField(max_length=50, blank=True, null=True)

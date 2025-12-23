@@ -1,7 +1,7 @@
 from django.db import models
+from accounts.fields import GenderField, DoctorScheduleTypeField
 
 # doctor/models.py
-from django.db import models
 
 
 class Doctor(models.Model):
@@ -31,18 +31,10 @@ class Doctor(models.Model):
 
 class ScheduleDoctor(models.Model):
     """의사 일정"""
-    
-    SCHEDULE_TYPE_CHOICES = [
-        ('CLINIC', '진료'),
-        ('SURGERY', '수술'),
-        ('MEETING', '회의'),
-        ('OFF', '휴무'),
-        ('VACATION', '휴가'),
-    ]
-    
+
     schedule_id = models.AutoField(primary_key=True)
     schedule_date = models.DateField()
-    schedule_type = models.CharField(max_length=30, choices=SCHEDULE_TYPE_CHOICES)
+    schedule_type = DoctorScheduleTypeField()
     start_time = models.TimeField()
     end_time = models.TimeField()
     clinic_room = models.CharField(max_length=20, blank=True, null=True)
@@ -65,18 +57,13 @@ class ScheduleDoctor(models.Model):
 
 class Patient(models.Model):
     """진단받는 환자"""
-    
-    GENDER_CHOICES = [
-        ('Male', '남성'),
-        ('Female', '여성'),
-    ]
-    
+
     patient_id = models.CharField(max_length=50, primary_key=True)
     sample_id = models.CharField(max_length=100, blank=True, null=True)
     name = models.CharField(max_length=100)
     date_of_birth = models.DateField(blank=True, null=True)
     age = models.IntegerField(blank=True, null=True)
-    gender = models.CharField(max_length=10, choices=GENDER_CHOICES, blank=True, null=True)
+    gender = GenderField(blank=True, null=True)
     current_status = models.CharField(max_length=30, blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
