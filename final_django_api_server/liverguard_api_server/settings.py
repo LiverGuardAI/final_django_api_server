@@ -125,6 +125,7 @@ AUTH_PASSWORD_VALIDATORS = [
 CORS_ALLOWED_ORIGINS = [
     "http://34.67.62.238:5173",  # 변경 필요
     "http://34.67.62.238:3000",  # 변경 필요
+    "http://localhost:5173",
 ]
 CORS_ALLOW_CREDENTIALS = True  # 쿠키 전송 허용
 
@@ -154,7 +155,7 @@ SIMPLE_JWT = {
 # Internationalization
 # https://docs.djangoproject.com/en/5.2/topics/i18n/
 
-LANGUAGE_CODE = 'en-us'
+LANGUAGE_CODE = 'ko-kr'
 
 TIME_ZONE = 'Asia/Seoul'
 

@@ -13,7 +13,8 @@ class CustomUser(AbstractUser):
 
     # AbstractUser 기본 필드: username, password, email, first_name, last_name
     # is_staff, is_active, is_superuser, last_login, date_joined
-    role = UserRoleField()
+    # ENUM 값: patient, doctor, radiologist, clerk
+    role = UserRoleField(null=True, blank=True)
     
     class Meta:
         db_table = 'auth_user'

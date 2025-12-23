@@ -6,6 +6,7 @@ class Radiology(models.Model):
     """영상의학과"""
     
     radiologic_id = models.AutoField(primary_key=True)
+    name = models.CharField(max_length=100)
     employee_no = models.CharField(max_length=50, unique=True)
     license_no = models.CharField(max_length=150)
     phone = models.CharField(max_length=20, blank=True, null=True)
@@ -17,6 +18,8 @@ class Radiology(models.Model):
     
     class Meta:
         db_table = 'hospital"."radiology'
+        verbose_name = '영상의학과'
+        verbose_name_plural = '영상의학과'
 
 
 class DICOMStudy(models.Model):
