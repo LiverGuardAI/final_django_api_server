@@ -68,6 +68,7 @@ class Patient(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     doctor = models.ForeignKey('doctor.Doctor', on_delete=models.SET_NULL, null=True, blank=True, db_column='doctor_id')
+    profile = models.OneToOneField('patients.UserProfile', on_delete=models.SET_NULL, null=True, blank=True, db_column='profile_id')
     
     class Meta:
         db_table = 'hospital"."patient'
