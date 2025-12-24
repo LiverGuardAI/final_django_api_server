@@ -19,6 +19,7 @@ from django.urls import path, include
 
 urlpatterns = [
     path('admin/', admin.site.urls),
+    path('api/ai/', include('ai_model_server.urls')),  # AI 관련 URL
     path('api/auth/', include('accounts.urls')),  # 인증 관련 URL
     path('api/doctor/', include('doctor.urls')),  # 의사 API
     path('api/radiology/', include('radiology.urls')),  # 영상의학과 API
