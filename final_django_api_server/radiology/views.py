@@ -1,6 +1,7 @@
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
+from rest_framework.permissions import AllowAny
 from django.db.models import Q
 from accounts.permissions import IsRadiologist, IsDoctorOrRadiologist
 from doctor.models import Patient
@@ -45,8 +46,8 @@ class DICOMStudyListView(APIView):
 
 
 class WaitlistView(APIView):
-    """촬영 대기 환자 목록 조회 API"""
-    permission_classes = [IsRadiologist]
+    """촬영 대기 환자 목록 조회 API (테스트용 - AllowAny)"""
+    permission_classes = [AllowAny]  # TODO: 나중에 IsRadiologist로 변경 필요
 
     def get(self, request):
         """
