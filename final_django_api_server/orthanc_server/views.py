@@ -176,3 +176,151 @@ class OrthancInstanceView(APIView):
                 'error': 'Failed to connect to Orthanc server',
                 'details': str(e)
             }, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+
+class OrthancSeriesListView(APIView):
+    """Orthanc Series 목록 조회 API"""
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        """
+        모든 Series 목록 조회
+        GET /series
+        """
+        try:
+            response = requests.get(
+                f'{ORTHANC_BASE_URL}/series',
+                timeout=10
+            )
+
+            if response.status_code == 200:
+                series_ids = response.json()
+
+                # 각 series의 상세 정보 가져오기
+                series_list = []
+                for series_id in series_ids[:50]:  # 최대 50개만 가져오기
+                    try:
+                        series_response = requests.get(
+                            f'{ORTHANC_BASE_URL}/series/{series_id}',
+                            timeout=5
+                        )
+                        if series_response.status_code == 200:
+                            series_data = series_response.json()
+                            series_list.append({
+                                'id': series_id,
+                                'data': series_data
+                            })
+                    except:
+                        continue
+
+                return Response(series_list, status=status.HTTP_200_OK)
+            else:
+                return Response({
+                    'error': 'Failed to fetch series list'
+                }, status=response.status_code)
+
+        except requests.exceptions.RequestException as e:
+            return Response({
+                'error': 'Failed to connect to Orthanc server',
+                'details': str(e)
+            }, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+
+class OrthancSeriesView(APIView):
+    """Orthanc Series 정보 조회 API"""
+    permission_classes = [AllowAny]
+
+    def get(self, request, series_id):
+        """
+        특정 Series 정보 조회
+        GET /series/{series_id}
+        """
+        try:
+            response = requests.get(
+                f'{ORTHANC_BASE_URL}/series/{series_id}',
+                timeout=10
+            )
+
+            if response.status_code == 200:
+                return Response(
+                    response.json(),
+                    status=status.HTTP_200_OK
+                )
+            else:
+                return Response({
+                    'error': f'Series {series_id} not found'
+                }, status=response.status_code)
+
+        except requests.exceptions.RequestException as e:
+            return Response({
+                'error': 'Failed to connect to Orthanc server',
+                'details': str(e)
+            }, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+
+class OrthancSeriesInstancesView(APIView):
+    """Orthanc Series의 Instances 목록 조회 API"""
+    permission_classes = [AllowAny]
+
+    def get(self, request, series_id):
+        """
+        특정 Series의 모든 Instances 조회
+        GET /series/{series_id}/instances
+        """
+        try:
+            response = requests.get(
+                f'{ORTHANC_BASE_URL}/series/{series_id}/instances',
+                timeout=10
+            )
+
+            if response.status_code == 200:
+                return Response(
+                    response.json(),
+                    status=status.HTTP_200_OK
+                )
+            else:
+                return Response({
+                    'error': f'Instances for series {series_id} not found'
+                }, status=response.status_code)
+
+        except requests.exceptions.RequestException as e:
+            return Response({
+                'error': 'Failed to connect to Orthanc server',
+                'details': str(e)
+            }, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+
+class OrthancInstanceFileView(APIView):
+    """Orthanc Instance 파일 다운로드 API"""
+    permission_classes = [AllowAny]
+
+    def get(self, request, instance_id):
+        """
+        특정 Instance의 DICOM 파일 다운로드
+        GET /instances/{instance_id}/file
+        """
+        try:
+            response = requests.get(
+                f'{ORTHANC_BASE_URL}/instances/{instance_id}/file',
+                timeout=30
+            )
+
+            if response.status_code == 200:
+                from django.http import HttpResponse
+                return HttpResponse(
+                    response.content,
+                    content_type='application/dicom',
+                    headers={
+                        'Content-Disposition': f'attachment; filename="{instance_id}.dcm"'
+                    }
+                )
+            else:
+                return Response({
+                    'error': f'File for instance {instance_id} not found'
+                }, status=response.status_code)
+
+        except requests.exceptions.RequestException as e:
+            return Response({
+                'error': 'Failed to connect to Orthanc server',
+                'details': str(e)
+            }, status=status.HTTP_503_SERVICE_UNAVAILABLE)
