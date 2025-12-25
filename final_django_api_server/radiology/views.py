@@ -112,3 +112,49 @@ class StartFilmingView(APIView):
             return Response({
                 'error': str(e)
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class EndFilmingView(APIView):
+    """환자 촬영 종료 API - 환자 상태를 '촬영완료'로 변경"""
+    permission_classes = [AllowAny]  # TODO: 나중에 IsRadiologist로 변경 필요
+
+    def post(self, request):
+        """
+        환자의 current_status를 '촬영완료'로 업데이트
+
+        Request Body:
+        {
+            "patient_id": "TCGA-BC-4073"
+        }
+        """
+        patient_id = request.data.get('patient_id')
+
+        if not patient_id:
+            return Response({
+                'error': 'patient_id is required'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            # 환자 조회
+            patient = Patient.objects.get(patient_id=patient_id)
+
+            # 상태 업데이트
+            patient.current_status = '촬영완료'
+            patient.save()
+
+            # 업데이트된 환자 정보 직렬화
+            serializer = PatientWaitlistSerializer(patient)
+
+            return Response({
+                'message': '촬영이 종료되었습니다',
+                'patient': serializer.data
+            }, status=status.HTTP_200_OK)
+
+        except Patient.DoesNotExist:
+            return Response({
+                'error': f'Patient with ID {patient_id} not found'
+            }, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            return Response({
+                'error': str(e)
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
