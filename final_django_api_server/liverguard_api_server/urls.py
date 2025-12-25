@@ -24,4 +24,5 @@ urlpatterns = [
     path('api/doctor/', include('doctor.urls')),  # 의사 API
     path('api/radiology/', include('radiology.urls')),  # 영상의학과 API
     path('api/administration/', include('administration.urls')),  # 원무과 API
+    path('api/orthanc/', include('orthanc_server.urls')),  # Orthanc 프록시 API
 ]
