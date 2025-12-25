@@ -46,6 +46,7 @@ INSTALLED_APPS = [
     'radiology',
     'patients',
     'ai_model_server',
+    'orthanc_server',
     'rest_framework',
     'rest_framework_simplejwt',
     'corsheaders',
