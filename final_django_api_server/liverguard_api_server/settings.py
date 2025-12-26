@@ -100,6 +100,19 @@ DATABASES = {
     }
 }
 
+# redis settings for channels and celery
+REDIS_HOST = "127.0.0.1"
+REDIS_PORT = 6379
+
+CHANNEL_LAYERS = {
+    "default": {
+        "BACKEND": "channels_redis.core.RedisChannelLayer",
+        "CONFIG": {
+            "hosts": [(REDIS_HOST, REDIS_PORT)],
+        },
+    },
+}
+
 # Custom user 
 AUTH_USER_MODEL = 'accounts.CustomUser'
 
