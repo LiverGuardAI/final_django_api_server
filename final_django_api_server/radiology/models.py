@@ -4,10 +4,11 @@ from django.db import models
 
 class Radiology(models.Model):
     """영상의학과"""
-    
+
     radiologic_id = models.AutoField(primary_key=True)
     name = models.CharField(max_length=100)
     employee_no = models.CharField(max_length=50, unique=True)
+    date_of_birth = models.DateField(blank=True, null=True)
     license_no = models.CharField(max_length=150)
     phone = models.CharField(max_length=20, blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)

@@ -71,6 +71,17 @@ class GenomicFeatureVector(models.Model):
 class AIAnalysisResult(models.Model):
     """통합 AI 분석 결과"""
 
+    class RiskGroup(models.TextChoices):
+        LOW = 'LOW', '저위험'
+        MEDIUM = 'MEDIUM', '중위험'
+        HIGH = 'HIGH', '고위험'
+
+    class Status(models.TextChoices):
+        PENDING = 'PENDING', '대기'
+        PROCESSING = 'PROCESSING', '처리중'
+        COMPLETED = 'COMPLETED', '완료'
+        FAILED = 'FAILED', '실패'
+
     result_id = models.AutoField(primary_key=True)
     task_type = models.CharField(max_length=30)
     model_name = models.CharField(max_length=100)
@@ -80,12 +91,12 @@ class AIAnalysisResult(models.Model):
     confidence_scores = models.JSONField(blank=True, null=True)
     probabilities = models.JSONField(blank=True, null=True)
     risk_score = models.DecimalField(max_digits=8, decimal_places=4, blank=True, null=True)
-    risk_group = RiskGroupField(blank=True, null=True)
+    risk_group = RiskGroupField(choices=RiskGroup.choices, blank=True, null=True)
     risk_factors = models.JSONField(blank=True, null=True)
     feature_importance = models.JSONField(blank=True, null=True)
     shap_values = models.JSONField(blank=True, null=True)
     explanation = models.TextField(blank=True, null=True)
-    status = StatusField()
+    status = StatusField(choices=Status.choices)
     error_message = models.TextField(blank=True, null=True)
     started_at = models.DateTimeField(blank=True, null=True)
     completed_at = models.DateTimeField(blank=True, null=True)
