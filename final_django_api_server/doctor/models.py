@@ -6,10 +6,11 @@ from accounts.fields import GenderField, DoctorScheduleTypeField
 
 class Doctor(models.Model):
     """의사"""
-    
+
     doctor_id = models.AutoField(primary_key=True)
     employee_no = models.CharField(max_length=50, unique=True)
     name = models.CharField(max_length=100)
+    date_of_birth = models.DateField(blank=True, null=True)
     license_no = models.CharField(max_length=50)
     phone = models.CharField(max_length=20, blank=True, null=True)
     room_number = models.CharField(max_length=10, blank=True, null=True)
@@ -32,9 +33,16 @@ class Doctor(models.Model):
 class ScheduleDoctor(models.Model):
     """의사 일정"""
 
+    class DoctorScheduleType(models.TextChoices):
+        OUTPATIENT = 'OUTPATIENT', '외래'
+        SURGERY = 'SURGERY', '수술'
+        CONFERENCE = 'CONFERENCE', '회의'
+        VACATION = 'VACATION', '휴가'
+        OTHER = 'OTHER', '기타'
+
     schedule_id = models.AutoField(primary_key=True)
     schedule_date = models.DateField()
-    schedule_type = DoctorScheduleTypeField()
+    schedule_type = DoctorScheduleTypeField(choices=DoctorScheduleType.choices)
     start_time = models.TimeField()
     end_time = models.TimeField()
     clinic_room = models.CharField(max_length=20, blank=True, null=True)
@@ -58,13 +66,35 @@ class ScheduleDoctor(models.Model):
 class Patient(models.Model):
     """진단받는 환자"""
 
+    class Gender(models.TextChoices):
+        M = 'M', '남성'
+        F = 'F', '여성'
+
+    class PatientStatus(models.TextChoices):
+        """환자의 현재 물리적 위치/상태"""
+        REGISTERED = 'REGISTERED', '접수완료'
+        WAITING_CLINIC = 'WAITING_CLINIC', '진료대기'
+        IN_CLINIC = 'IN_CLINIC', '진료중'
+        WAITING_IMAGING = 'WAITING_IMAGING', '촬영대기'
+        IN_IMAGING = 'IN_IMAGING', '촬영중'
+        WAITING_LAB = 'WAITING_LAB', '검사대기'
+        IN_LAB = 'IN_LAB', '검사중'
+        COMPLETED = 'COMPLETED', '당일진료완료'
+        DISCHARGED = 'DISCHARGED', '퇴원'
+
     patient_id = models.CharField(max_length=50, primary_key=True)
     sample_id = models.CharField(max_length=100, blank=True, null=True)
     name = models.CharField(max_length=100)
     date_of_birth = models.DateField(blank=True, null=True)
     age = models.IntegerField(blank=True, null=True)
-    gender = GenderField(blank=True, null=True)
-    current_status = models.CharField(max_length=30, blank=True, null=True)
+    gender = GenderField(choices=Gender.choices, blank=True, null=True)
+    current_status = models.CharField(
+        max_length=30,
+        choices=PatientStatus.choices,
+        default=PatientStatus.REGISTERED,
+        blank=True,
+        null=True
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     doctor = models.ForeignKey('doctor.Doctor', on_delete=models.SET_NULL, null=True, blank=True, db_column='doctor_id')
@@ -91,12 +121,27 @@ class DiagnosisType(models.Model):
 
 class Encounter(models.Model):
     """진료 기록"""
-    
+
+    class EncounterStatus(models.TextChoices):
+        """진료 건의 처리 상태"""
+        SCHEDULED = 'SCHEDULED', '예약됨'
+        WAITING = 'WAITING', '대기중'
+        IN_PROGRESS = 'IN_PROGRESS', '진료중'
+        COMPLETED = 'COMPLETED', '완료'
+        CANCELLED = 'CANCELLED', '취소'
+        NO_SHOW = 'NO_SHOW', '노쇼'
+
     encounter_id = models.AutoField(primary_key=True)
     clinic_room = models.CharField(max_length=20, blank=True, null=True)
     encounter_date = models.DateField()
     encounter_time = models.TimeField()
-    encounter_status = models.CharField(max_length=30, blank=True, null=True)
+    encounter_status = models.CharField(
+        max_length=30,
+        choices=EncounterStatus.choices,
+        default=EncounterStatus.SCHEDULED,
+        blank=True,
+        null=True
+    )
     department = models.CharField(max_length=100, blank=True, null=True)
     checkin_time = models.DateTimeField(blank=True, null=True)
     encounter_start = models.TimeField(blank=True, null=True)
@@ -266,13 +311,26 @@ class Prescription(models.Model):
 class ImagingOrder(models.Model):
     """영상 검사 처방"""
 
+    class ImagingStatus(models.TextChoices):
+        """영상 검사 상태"""
+        REQUESTED = 'REQUESTED', '요청됨'
+        WAITING = 'WAITING', '촬영대기'
+        IN_PROGRESS = 'IN_PROGRESS', '촬영중'
+        COMPLETED = 'COMPLETED', '완료'
+        REPORTED = 'REPORTED', '판독완료'
+        CANCELLED = 'CANCELLED', '취소'
+
     order_id = models.AutoField(primary_key=True)
     modality = models.CharField(max_length=16)
     body_part = models.CharField(max_length=64, blank=True, null=True)
     order_notes = models.TextField(blank=True, null=True)
     priority = models.CharField(max_length=10, default='ROUTINE')
 
-    status = models.CharField(max_length=20, default='REQUESTED')
+    status = models.CharField(
+        max_length=20,
+        choices=ImagingStatus.choices,
+        default=ImagingStatus.REQUESTED
+    )
 
     ordered_at = models.DateTimeField(auto_now_add=True)
     scheduled_at = models.DateTimeField(blank=True, null=True)

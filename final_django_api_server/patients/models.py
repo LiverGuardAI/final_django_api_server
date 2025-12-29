@@ -5,11 +5,15 @@ from accounts.fields import GenderField, ScheduleTypeField, MealTimingField, Med
 
 class UserProfile(models.Model):
     """앱 사용자 프로필"""
-    
+
+    class Gender(models.TextChoices):
+        M = 'M', '남성'
+        F = 'F', '여성'
+
     profile_id = models.BigAutoField(primary_key=True)
     nickname = models.CharField(max_length=20)
     birth_date = models.DateField(blank=True, null=True)
-    gender = GenderField(blank=True, null=True)
+    gender = GenderField(choices=Gender.choices, blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     user_id = models.BigIntegerField()
@@ -189,14 +193,25 @@ class DURContraindication(models.Model):
 class MedicationSchedule(models.Model):
     """복약 일정 관리"""
 
+    class ScheduleType(models.TextChoices):
+        DAILY = 'DAILY', '매일'
+        WEEKLY = 'WEEKLY', '매주'
+        CUSTOM = 'CUSTOM', '사용자 정의'
+
+    class MealTiming(models.TextChoices):
+        BEFORE_MEAL = 'BEFORE_MEAL', '식전'
+        AFTER_MEAL = 'AFTER_MEAL', '식후'
+        WITH_MEAL = 'WITH_MEAL', '식사와 함께'
+        ANYTIME = 'ANYTIME', '상관없음'
+
     schedule_id = models.BigAutoField(primary_key=True)
-    schedule_type = ScheduleTypeField(blank=True, null=True)
+    schedule_type = ScheduleTypeField(choices=ScheduleType.choices, blank=True, null=True)
     times_per_day = models.IntegerField(blank=True, null=True)
     time_slots = models.JSONField(blank=True, null=True)
     start_date = models.DateField()
     end_date = models.DateField(blank=True, null=True)
     total_days = models.IntegerField(blank=True, null=True)
-    meal_timing = MealTimingField(blank=True, null=True)
+    meal_timing = MealTimingField(choices=MealTiming.choices, blank=True, null=True)
     reminder_enabled = models.BooleanField(default=True)
     reminder_advance_minutes = models.IntegerField(default=30)
     is_active = models.BooleanField(default=True)
@@ -215,11 +230,17 @@ class MedicationSchedule(models.Model):
 class MedicationLog(models.Model):
     """복약 기록"""
 
+    class MedicationStatus(models.TextChoices):
+        TAKEN = 'TAKEN', '복용함'
+        SKIPPED = 'SKIPPED', '건너뜀'
+        MISSED = 'MISSED', '누락'
+        SCHEDULED = 'SCHEDULED', '예정'
+
     log_id = models.BigAutoField(primary_key=True)
     scheduled_date = models.DateField()
     scheduled_time = models.TimeField()
     taken_at = models.DateTimeField(blank=True, null=True)
-    status = MedicationStatusField()
+    status = MedicationStatusField(choices=MedicationStatus.choices)
     skip_reason = models.TextField(blank=True, null=True)
     scheduled_dosage = models.CharField(max_length=50, blank=True, null=True)
     actual_dosage = models.CharField(max_length=50, blank=True, null=True)
