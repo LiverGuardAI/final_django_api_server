@@ -20,8 +20,8 @@ urlpatterns = [
 
     # 환자 관리
     path('patients/', PatientListView.as_view(), name='patient_list'),
-    path('patients/<str:patient_id>/', PatientDetailView.as_view(), name='patient_detail'),
     path('patients/register/', PatientRegistrationView.as_view(), name='patient_registration'),
+    path('patients/<str:patient_id>/', PatientDetailView.as_view(), name='patient_detail'),
 
     # 예약 관리
     path('appointments/', AppointmentListView.as_view(), name='appointment_list'),

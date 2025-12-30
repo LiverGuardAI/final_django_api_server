@@ -14,6 +14,7 @@ class PatientSerializer(serializers.ModelSerializer):
             'date_of_birth',
             'age',
             'gender',
+            'phone',
             'current_status',
             'created_at',
             'updated_at',
@@ -32,11 +33,36 @@ class PatientCreateSerializer(serializers.ModelSerializer):
             'patient_id',
             'name',
             'date_of_birth',
-            'age',
             'gender',
+            'phone',
             'sample_id',
-            'doctor_id',
         ]
+
+    def validate_patient_id(self, value):
+        """patient_id 중복 체크"""
+        if Patient.objects.filter(patient_id=value).exists():
+            raise serializers.ValidationError("이미 존재하는 환자 ID입니다.")
+        return value
+
+    def validate_gender(self, value):
+        """성별 유효성 검사"""
+        if value and value not in ['M', 'F']:
+            raise serializers.ValidationError("성별은 'M' 또는 'F'만 가능합니다.")
+        return value
+
+    def create(self, validated_data):
+        """환자 생성 - 기본 상태는 REGISTERED, 나이 자동 계산"""
+        validated_data['current_status'] = 'REGISTERED'
+
+        # 생년월일로부터 나이 자동 계산
+        if validated_data.get('date_of_birth'):
+            from datetime import date
+            birth_date = validated_data['date_of_birth']
+            today = date.today()
+            age = today.year - birth_date.year - ((today.month, today.day) < (birth_date.month, birth_date.day))
+            validated_data['age'] = age
+
+        return super().create(validated_data)
 
 
 class AppointmentSerializer(serializers.ModelSerializer):

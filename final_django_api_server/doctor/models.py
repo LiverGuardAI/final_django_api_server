@@ -88,6 +88,7 @@ class Patient(models.Model):
     date_of_birth = models.DateField(blank=True, null=True)
     age = models.IntegerField(blank=True, null=True)
     gender = GenderField(choices=Gender.choices, blank=True, null=True)
+    phone = models.CharField(max_length=20, blank=True, null=True)
     current_status = models.CharField(
         max_length=30,
         choices=PatientStatus.choices,

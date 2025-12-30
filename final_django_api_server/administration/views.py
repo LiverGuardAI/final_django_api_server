@@ -82,7 +82,7 @@ class PatientListView(APIView):
 
 
 class PatientDetailView(APIView):
-    """환자 상세 정보 조회 API"""
+    """환자 상세 정보 조회 및 수정 API"""
     permission_classes = [IsAuthenticated]
 
     def get(self, request, patient_id):
@@ -90,6 +90,34 @@ class PatientDetailView(APIView):
             patient = Patient.objects.get(patient_id=patient_id)
             serializer = PatientSerializer(patient)
             return Response(serializer.data, status=status.HTTP_200_OK)
+        except Patient.DoesNotExist:
+            return Response(
+                {'error': '환자를 찾을 수 없습니다.'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+    def patch(self, request, patient_id):
+        try:
+            patient = Patient.objects.get(patient_id=patient_id)
+            serializer = PatientSerializer(patient, data=request.data, partial=True)
+
+            if serializer.is_valid():
+                # 생년월일이 변경되면 나이 자동 재계산
+                if 'date_of_birth' in request.data and request.data['date_of_birth']:
+                    from datetime import date
+                    birth_date_str = request.data['date_of_birth']
+                    birth_date = datetime.strptime(birth_date_str, '%Y-%m-%d').date()
+                    today = date.today()
+                    age = today.year - birth_date.year - ((today.month, today.day) < (birth_date.month, birth_date.day))
+                    serializer.validated_data['age'] = age
+
+                serializer.save()
+                return Response({
+                    'message': '환자 정보가 수정되었습니다.',
+                    'patient': serializer.data
+                }, status=status.HTTP_200_OK)
+
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
         except Patient.DoesNotExist:
             return Response(
                 {'error': '환자를 찾을 수 없습니다.'},

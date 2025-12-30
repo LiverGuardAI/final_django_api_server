@@ -159,12 +159,16 @@ from datetime import timedelta
 SIMPLE_JWT = {
     'ACCESS_TOKEN_LIFETIME': timedelta(minutes=10),   # Access 토큰: 10분
     'REFRESH_TOKEN_LIFETIME': timedelta(days=7),      # Refresh 토큰: 7일
-    
+
     'ROTATE_REFRESH_TOKENS': False,    # Refresh 토큰 회전 (보안 강화)
     'BLACKLIST_AFTER_ROTATION': False, # 사용한 Refresh 토큰 블랙리스트 등록
-    
+
     'AUTH_HEADER_TYPES': ('Bearer',), # Authorization: Bearer <token>
     'AUTH_TOKEN_CLASSES': ('rest_framework_simplejwt.tokens.AccessToken',),
+
+    # CustomUser 모델의 Primary Key 필드 지정
+    'USER_ID_FIELD': 'user_id',
+    'USER_ID_CLAIM': 'user_id',
 }
 # Internationalization
 # https://docs.djangoproject.com/en/5.2/topics/i18n/
