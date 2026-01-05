@@ -6,7 +6,6 @@ from accounts.permissions import IsClerk
 from doctor.models import Patient, Appointment, Encounter
 from .serializers import (
     PatientSerializer,
-    PatientCreateSerializer,
     AppointmentSerializer,
     AppointmentCreateSerializer,
     EncounterSerializer,
@@ -102,15 +101,6 @@ class PatientDetailView(APIView):
             serializer = PatientSerializer(patient, data=request.data, partial=True)
 
             if serializer.is_valid():
-                # 생년월일이 변경되면 나이 자동 재계산
-                if 'date_of_birth' in request.data and request.data['date_of_birth']:
-                    from datetime import date
-                    birth_date_str = request.data['date_of_birth']
-                    birth_date = datetime.strptime(birth_date_str, '%Y-%m-%d').date()
-                    today = date.today()
-                    age = today.year - birth_date.year - ((today.month, today.day) < (birth_date.month, birth_date.day))
-                    serializer.validated_data['age'] = age
-
                 serializer.save()
                 return Response({
                     'message': '환자 정보가 수정되었습니다.',
@@ -130,10 +120,10 @@ class PatientRegistrationView(APIView):
     permission_classes = [IsClerk]
 
     def post(self, request):
-        serializer = PatientCreateSerializer(data=request.data)
+        serializer = PatientSerializer(data=request.data)
 
         if serializer.is_valid():
-            patient = serializer.save()
+            patient = serializer.save(staff=request.user)
             return Response({
                 'message': '환자 등록 완료',
                 'patient': PatientSerializer(patient).data
@@ -271,8 +261,19 @@ class EncounterListView(APIView):
 
         if serializer.is_valid():
             # 1. DB에 Encounter 저장
+            # Get the Administration staff_id from the logged-in user
+            try:
+                staff_obj = request.user.administration
+                staff_id = staff_obj.staff_id
+            except Exception as e:
+                # User doesn't have administration profile
+                return Response({
+                    'success': False,
+                    'message': f'원무과 프로필을 찾을 수 없습니다: {str(e)}'
+                }, status=status.HTTP_400_BAD_REQUEST)
+
             encounter = serializer.save(
-                staff_id=request.user.user_id,
+                staff_id=staff_id,
                 encounter_status=Encounter.EncounterStatus.WAITING
             )
 

@@ -1,7 +1,10 @@
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
+from rest_framework.permissions import IsAuthenticated
 from accounts.permissions import IsDoctor
+from .models import Doctor
+from .serializers import DoctorListSerializer
 
 
 class DoctorDashboardView(APIView):
@@ -37,4 +40,22 @@ class PatientListView(APIView):
         return Response({
             'message': '환자 목록',
             'patients': []  # 실제 환자 데이터로 대체 필요
+        }, status=status.HTTP_200_OK)
+
+
+class DoctorListView(APIView):
+    """의사 목록 조회 API (원무과 환자 접수용)"""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        """
+        모든 의사 목록 조회
+        원무과에서 환자 접수 시 의사를 선택하기 위해 사용
+        """
+        doctors = Doctor.objects.select_related('department', 'user').all()
+        serializer = DoctorListSerializer(doctors, many=True)
+
+        return Response({
+            'count': doctors.count(),
+            'results': serializer.data
         }, status=status.HTTP_200_OK)
