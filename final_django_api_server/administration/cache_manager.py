@@ -30,9 +30,9 @@ class RedisCacheManager:
             )
             # 연결 테스트
             self.redis_client.ping()
-            print("✓ Redis 연결 성공")
+            print("[OK] Redis connection successful")
         except Exception as e:
-            print(f"✗ Redis 연결 실패: {e}")
+            print(f"[ERROR] Redis connection failed: {e}")
             self.redis_client = None
 
     def is_connected(self):

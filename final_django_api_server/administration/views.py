@@ -319,6 +319,22 @@ class WaitingQueueView(APIView):
         # RabbitMQ에서 대기 목록 조회 (큐에서 제거하지 않음)
         waiting_list = queue_manager.peek_queue(max_count=max_count)
 
+        # Encounter 정보 추가 (Django ORM은 여기서 실행)
+        enriched_list = []
+        for item in waiting_list:
+            try:
+                encounter = Encounter.objects.select_related('patient', 'doctor').get(
+                    encounter_id=item['encounter_id']
+                )
+                item['patient_birth_date'] = encounter.patient.date_of_birth.strftime('%Y-%m-%d') if encounter.patient.date_of_birth else None
+                item['encounter_status'] = encounter.encounter_status
+                item['doctor_id'] = encounter.doctor.doctor_id if encounter.doctor else None
+            except Encounter.DoesNotExist:
+                item['patient_birth_date'] = None
+                item['encounter_status'] = 'WAITING'
+                item['doctor_id'] = None
+            enriched_list.append(item)
+
         # Redis에서 통계 조회
         waiting_count = cache_manager.get_waiting_count('clinic')
         in_progress_count = cache_manager.get_in_progress_count('clinic')
@@ -330,7 +346,7 @@ class WaitingQueueView(APIView):
                 'in_progress': in_progress_count,
                 'total': waiting_count + in_progress_count
             },
-            'queue': waiting_list
+            'queue': enriched_list
         }, status=status.HTTP_200_OK)
 
 
