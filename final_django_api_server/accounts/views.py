@@ -158,7 +158,7 @@ class AdministrationLoginView(APIView):
                 raise Administration.DoesNotExist
 
             user = admin_staff.user
-            if user.role != 'clerk':
+            if user.role != 'CLERK':
                 return Response(
                     {'error': '원무과 계정이 아닙니다.'},
                     status=status.HTTP_403_FORBIDDEN

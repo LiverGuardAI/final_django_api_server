@@ -6,7 +6,6 @@ from accounts.permissions import IsClerk
 from doctor.models import Patient, Appointment, Encounter
 from .serializers import (
     PatientSerializer,
-    PatientCreateSerializer,
     AppointmentSerializer,
     AppointmentCreateSerializer,
     EncounterSerializer,
@@ -63,7 +62,12 @@ class PatientListView(APIView):
         # 검색 쿼리
         search = request.query_params.get('search', '')
 
-        patients = Patient.objects.all()
+        # 페이지네이션 파라미터
+        page = int(request.query_params.get('page', 1))
+        page_size = int(request.query_params.get('page_size', 20))
+
+        # select_related로 N+1 쿼리 방지
+        patients = Patient.objects.select_related('doctor').all()
 
         if search:
             patients = patients.filter(
@@ -72,17 +76,28 @@ class PatientListView(APIView):
                 Q(sample_id__icontains=search)
             )
 
+        # 총 개수 먼저 계산
+        total_count = patients.count()
+
+        # 정렬 및 페이지네이션
         patients = patients.order_by('-created_at')
+        start = (page - 1) * page_size
+        end = start + page_size
+        patients = patients[start:end]
+
         serializer = PatientSerializer(patients, many=True)
 
         return Response({
-            'count': patients.count(),
+            'count': total_count,
+            'page': page,
+            'page_size': page_size,
+            'total_pages': (total_count + page_size - 1) // page_size,
             'results': serializer.data
         }, status=status.HTTP_200_OK)
 
 
 class PatientDetailView(APIView):
-    """환자 상세 정보 조회 API"""
+    """환자 상세 정보 조회 및 수정 API"""
     permission_classes = [IsAuthenticated]
 
     def get(self, request, patient_id):
@@ -96,16 +111,35 @@ class PatientDetailView(APIView):
                 status=status.HTTP_404_NOT_FOUND
             )
 
+    def patch(self, request, patient_id):
+        try:
+            patient = Patient.objects.get(patient_id=patient_id)
+            serializer = PatientSerializer(patient, data=request.data, partial=True)
+
+            if serializer.is_valid():
+                serializer.save()
+                return Response({
+                    'message': '환자 정보가 수정되었습니다.',
+                    'patient': serializer.data
+                }, status=status.HTTP_200_OK)
+
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        except Patient.DoesNotExist:
+            return Response(
+                {'error': '환자를 찾을 수 없습니다.'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
 
 class PatientRegistrationView(APIView):
     """환자 등록 API (원무과 전용)"""
     permission_classes = [IsClerk]
 
     def post(self, request):
-        serializer = PatientCreateSerializer(data=request.data)
+        serializer = PatientSerializer(data=request.data)
 
         if serializer.is_valid():
-            patient = serializer.save()
+            patient = serializer.save(staff=request.user)
             return Response({
                 'message': '환자 등록 완료',
                 'patient': PatientSerializer(patient).data
@@ -243,8 +277,19 @@ class EncounterListView(APIView):
 
         if serializer.is_valid():
             # 1. DB에 Encounter 저장
+            # Get the Administration staff_id from the logged-in user
+            try:
+                staff_obj = request.user.administration
+                staff_id = staff_obj.staff_id
+            except Exception as e:
+                # User doesn't have administration profile
+                return Response({
+                    'success': False,
+                    'message': f'원무과 프로필을 찾을 수 없습니다: {str(e)}'
+                }, status=status.HTTP_400_BAD_REQUEST)
+
             encounter = serializer.save(
-                staff_id=request.user.user_id,
+                staff_id=staff_id,
                 encounter_status=Encounter.EncounterStatus.WAITING
             )
 
