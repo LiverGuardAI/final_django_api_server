@@ -9,13 +9,15 @@ from datetime import date
 class PatientSerializer(serializers.ModelSerializer):
     """환자 정보 직렬화 (조회, 등록, 수정 통합)"""
 
+    staff = serializers.PrimaryKeyRelatedField(read_only=True)
+    
     class Meta:
         model = Patient
         fields = '__all__'
         # staff: 뷰에서 자동 주입하므로 입력받지 않음
         # age: 생년월일 기반 자동 계산하므로 입력받지 않음
         # created_at, updated_at: 자동 생성
-        read_only_fields = ['created_at', 'updated_at', 'staff', 'age']
+        read_only_fields = ['created_at', 'updated_at', 'age']
 
     # --- [유효성 검사 (Validation)] ---
 
@@ -110,3 +112,4 @@ class EncounterCreateSerializer(serializers.ModelSerializer):
             'department', 'clinic_room', 'is_first_visit', 'chief_complaint',
             'patient', 'doctor', 'staff',
         ]
+        read_only_fields = ['staff']
