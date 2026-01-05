@@ -41,7 +41,7 @@ class DepartmentSerializer(serializers.ModelSerializer):
     """부서 정보 Serializer"""
     class Meta:
         model = Department
-        fields = ['dept_id', 'dept_name', 'description']
+        fields = ['department_id', 'dept_name', 'dept_code', 'dept_type']
 
 
 class DoctorListSerializer(serializers.ModelSerializer):
