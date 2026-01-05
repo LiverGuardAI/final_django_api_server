@@ -62,7 +62,12 @@ class PatientListView(APIView):
         # 검색 쿼리
         search = request.query_params.get('search', '')
 
-        patients = Patient.objects.all()
+        # 페이지네이션 파라미터
+        page = int(request.query_params.get('page', 1))
+        page_size = int(request.query_params.get('page_size', 20))
+
+        # select_related로 N+1 쿼리 방지
+        patients = Patient.objects.select_related('doctor').all()
 
         if search:
             patients = patients.filter(
@@ -71,11 +76,22 @@ class PatientListView(APIView):
                 Q(sample_id__icontains=search)
             )
 
+        # 총 개수 먼저 계산
+        total_count = patients.count()
+
+        # 정렬 및 페이지네이션
         patients = patients.order_by('-created_at')
+        start = (page - 1) * page_size
+        end = start + page_size
+        patients = patients[start:end]
+
         serializer = PatientSerializer(patients, many=True)
 
         return Response({
-            'count': patients.count(),
+            'count': total_count,
+            'page': page,
+            'page_size': page_size,
+            'total_pages': (total_count + page_size - 1) // page_size,
             'results': serializer.data
         }, status=status.HTTP_200_OK)
 
