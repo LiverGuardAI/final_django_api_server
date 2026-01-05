@@ -100,13 +100,8 @@ DATABASES = {
     }
 }
 
-<<<<<<< HEAD
-# Redis Configuration (실시간 캐싱 및 통계)
-# 개발: localhost, 운영: 환경변수로 GCP IP 설정
-=======
 # redis settings for channels and celery
 # Redis Configuration (실시간 캐싱 및 통계)
->>>>>>> 466e453 (chore gcp deploy settings)
 REDIS_HOST = os.getenv('REDIS_HOST', 'localhost')
 REDIS_PORT = int(os.getenv('REDIS_PORT', 6379))
 REDIS_DB = int(os.getenv('REDIS_DB', 0))  # DB 0: 캐싱용
@@ -209,17 +204,10 @@ CELERY_TIMEZONE = 'Asia/Seoul'
 CELERY_TASK_TRACK_STARTED = True
 
 # RabbitMQ Configuration (진료 대기열 관리)
-<<<<<<< HEAD
 # 개발: localhost, 운영: 환경변수로 GCP IP 설정
-=======
->>>>>>> 466e453 (chore gcp deploy settings)
 RABBITMQ_HOST = os.getenv('RABBITMQ_HOST', 'localhost')
 RABBITMQ_PORT = int(os.getenv('RABBITMQ_PORT', 5672))
 RABBITMQ_USER = os.getenv('RABBITMQ_USER', 'admin')
 RABBITMQ_PASSWORD = os.getenv('RABBITMQ_PASSWORD', 'admin123')
 RABBITMQ_VHOST = os.getenv('RABBITMQ_VHOST', '/')
-<<<<<<< HEAD
 CELERY_TASK_TIME_LIMIT = 3600  # 1 hour
-=======
-CELERY_TASK_TIME_LIMIT = 3600  # 1 hour
->>>>>>> 466e453 (chore gcp deploy settings)
