@@ -13,8 +13,10 @@ from django.http import FileResponse
 
 
 # Orthanc 서버 설정
-ORTHANC_BASE_URL = 'http://34.67.62.238/orthanc'
-
+ORTHANC_BASE_URL = os.getenv(
+    'ORTHANC_BASE_URL',
+    'http://34.67.62.238/orthanc'  # 기본값 (로컬 개발용)
+)
 
 class UploadDicomView(APIView):
     """DICOM 파일을 Orthanc 서버에 업로드하는 프록시 API"""
