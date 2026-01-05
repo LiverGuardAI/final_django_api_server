@@ -98,7 +98,8 @@ class Patient(models.Model):
     )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-    # doctor 필드 제거: 담당 의사는 Encounter를 통해 관리 (당직의/대진의/협진 지원)
+    # doctor 필드 제거: 환자의 담당 의사는 Encounter를 통해 관리
+    # 실제 진료는 Encounter.doctor로 추적 (당직의/대진의/협진 지원)
     profile = models.OneToOneField('patients.UserProfile', on_delete=models.SET_NULL, null=True, blank=True, db_column='profile_id')
     
     class Meta:
