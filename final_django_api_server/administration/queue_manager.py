@@ -1,64 +1,54 @@
 # administration/queue_manager.py
-"""
-RabbitMQ를 사용한 진료 대기열 관리
-- 진료 대기 → 진료 중 → 진료 완료 상태 관리
-"""
+
 import pika
 import json
 from django.conf import settings
 from datetime import datetime
 
-
 class WaitingQueueManager:
-    """진료 대기열 관리 클래스"""
+    """진료 대기열 관리 클래스 (Singleton Pattern 추천)"""
 
     def __init__(self):
-        # RabbitMQ 연결 설정
+        self.queue_name = 'medical_waiting_queue'
         self.connection = None
         self.channel = None
-        self.queue_name = 'medical_waiting_queue'
+        # 초기화 시 바로 연결 시도하지 않음 (사용할 때 연결)
+
+    def _get_connection_params(self):
+        """설정 파일에서 RabbitMQ 연결 정보 가져오기"""
+        return pika.ConnectionParameters(
+            host=getattr(settings, 'RABBITMQ_HOST', 'rabbitmq'), # Docker 서비스명 기본값
+            port=int(getattr(settings, 'RABBITMQ_PORT', 5672)),
+            virtual_host=getattr(settings, 'RABBITMQ_VHOST', '/'),
+            credentials=pika.PlainCredentials(
+                getattr(settings, 'RABBITMQ_USER', 'admin'),
+                getattr(settings, 'RABBITMQ_PASSWORD', 'admin123')
+            ),
+            # 연결 타임아웃 설정 (렉 방지)
+            socket_timeout=5,
+            blocked_connection_timeout=5
+        )
 
     def connect(self):
-        """RabbitMQ 서버 연결"""
+        """RabbitMQ 연결 (연결이 살아있으면 재사용)"""
         try:
-            # RabbitMQ 연결 파라미터
-            credentials = pika.PlainCredentials(
-                getattr(settings, 'RABBITMQ_USER', 'guest'),
-                getattr(settings, 'RABBITMQ_PASSWORD', 'guest')
-            )
-            parameters = pika.ConnectionParameters(
-                host=getattr(settings, 'RABBITMQ_HOST', 'localhost'),
-                port=getattr(settings, 'RABBITMQ_PORT', 5672),
-                virtual_host=getattr(settings, 'RABBITMQ_VHOST', '/'),
-                credentials=credentials
-            )
+            if self.connection and not self.connection.is_closed and self.channel and self.channel.is_open:
+                return True
 
-            self.connection = pika.BlockingConnection(parameters)
+            # 새 연결 생성
+            self.connection = pika.BlockingConnection(self._get_connection_params())
             self.channel = self.connection.channel()
-
-            # 큐 선언 (durable=True로 영구 저장)
             self.channel.queue_declare(queue=self.queue_name, durable=True)
-
             return True
+
         except Exception as e:
-            print(f"RabbitMQ 연결 실패: {e}")
+            print(f"!!! RabbitMQ 연결 실패: {e}")
+            self.connection = None
+            self.channel = None
             return False
 
-    def disconnect(self):
-        """RabbitMQ 연결 종료"""
-        if self.connection and not self.connection.is_closed:
-            self.connection.close()
-
     def add_to_queue(self, encounter_id, patient_id, patient_name, priority=5):
-        """
-        진료 대기열에 추가
-
-        Args:
-            encounter_id: 진료 기록 ID
-            patient_id: 환자 ID
-            patient_name: 환자 이름
-            priority: 우선순위 (1-10, 낮을수록 높은 우선순위)
-        """
+        """진료 대기열에 환자 추가 (Producer)"""
         if not self.connect():
             return False
 
@@ -81,27 +71,22 @@ class WaitingQueueManager:
                     priority=priority
                 )
             )
-
-            print(f"✓ 대기열 추가: {patient_name} (Encounter #{encounter_id})")
+            print(f"✓ 대기열 추가 성공: {patient_name}")
             return True
 
         except Exception as e:
-            print(f"대기열 추가 실패: {e}")
+            print(f"!!! 대기열 추가 중 에러: {e}")
+            # 에러 발생 시 연결 초기화 (다음 시도 때 재연결)
+            self.connection = None 
             return False
-        finally:
-            self.disconnect()
 
     def get_next_patient(self):
-        """
-        다음 대기 환자 가져오기
-
-        Returns:
-            dict: 환자 정보 또는 None
-        """
+        """다음 환자 호출 (Consumer)"""
         if not self.connect():
             return None
 
         try:
+            # basic_get은 큐에서 하나를 꺼냅니다.
             method_frame, header_frame, body = self.channel.basic_get(
                 queue=self.queue_name,
                 auto_ack=False
@@ -109,105 +94,36 @@ class WaitingQueueManager:
 
             if method_frame:
                 message = json.loads(body)
-
-                # 메시지 확인 (큐에서 제거)
+                # 처리 완료 도장 찍기 (큐에서 영구 삭제)
                 self.channel.basic_ack(delivery_tag=method_frame.delivery_tag)
-
-                print(f"✓ 다음 환자: {message['patient_name']}")
+                print(f"✓ 진료실 호출: {message['patient_name']}")
                 return message
             else:
-                print("대기 중인 환자가 없습니다.")
-                return None
+                return None  # 대기 환자 없음
 
         except Exception as e:
-            print(f"환자 가져오기 실패: {e}")
+            print(f"!!! 환자 호출 실패: {e}")
+            self.connection = None
             return None
-        finally:
-            self.disconnect()
 
     def get_queue_length(self):
-        """
-        현재 대기열 길이 조회
-
-        Returns:
-            int: 대기 중인 환자 수
-        """
+        """현재 대기 인원 수 조회"""
         if not self.connect():
             return 0
-
         try:
-            queue_state = self.channel.queue_declare(
-                queue=self.queue_name,
-                durable=True,
-                passive=True  # 큐 상태만 확인
-            )
-            count = queue_state.method.message_count
-            return count
-
-        except Exception as e:
-            print(f"대기열 길이 조회 실패: {e}")
+            res = self.channel.queue_declare(queue=self.queue_name, durable=True, passive=True)
+            return res.method.message_count
+        except Exception:
             return 0
-        finally:
-            self.disconnect()
-
-    def peek_queue(self, max_count=10):
-        """
-        대기열 미리보기 (제거하지 않고 조회)
-
-        Args:
-            max_count: 최대 조회 건수
-
-        Returns:
-            list: 대기 환자 목록
-        """
-        if not self.connect():
-            return []
-
-        try:
-            waiting_list = []
-
-            # 메시지를 가져오되 확인하지 않음 (다시 큐에 넣기)
-            for i in range(max_count):
-                method_frame, header_frame, body = self.channel.basic_get(
-                    queue=self.queue_name,
-                    auto_ack=False
-                )
-
-                if method_frame:
-                    message = json.loads(body)
-                    waiting_list.append(message)
-
-                    # 메시지를 다시 큐에 넣기 (nack)
-                    self.channel.basic_nack(
-                        delivery_tag=method_frame.delivery_tag,
-                        requeue=True
-                    )
-                else:
-                    break
-
-            return waiting_list
-
-        except Exception as e:
-            print(f"대기열 미리보기 실패: {e}")
-            return []
-        finally:
-            self.disconnect()
+            
+    # 대기열 목록은 RabbitMQ로 보여주면 중복 문제가 생기므로, views.py에서 DB(Encounter)나 Redis를 조회
 
     def clear_queue(self):
-        """대기열 전체 삭제 (테스트용)"""
-        if not self.connect():
-            return False
-
+        """테스트용: 대기열 초기화"""
+        if not self.connect(): return False
         try:
             self.channel.queue_purge(queue=self.queue_name)
-            print("✓ 대기열 초기화 완료")
             return True
-        except Exception as e:
-            print(f"대기열 초기화 실패: {e}")
-            return False
-        finally:
-            self.disconnect()
+        except: return False
 
-
-# 싱글톤 인스턴스
 queue_manager = WaitingQueueManager()

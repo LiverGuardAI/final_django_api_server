@@ -30,9 +30,9 @@ class RedisCacheManager:
             )
             # 연결 테스트
             self.redis_client.ping()
-            print("✓ Redis 연결 성공")
+            print("[OK] Redis connection successful")
         except Exception as e:
-            print(f"✗ Redis 연결 실패: {e}")
+            print(f"[ERROR] Redis connection failed: {e}")
             self.redis_client = None
 
     def is_connected(self):
@@ -263,7 +263,7 @@ class RedisCacheManager:
             self.redis_client.set(f'{queue_type}:waiting_count', 0)
             self.redis_client.set(f'{queue_type}:in_progress_count', 0)
 
-        print("✓ Redis 통계 초기화 완료")
+        print("[OK] Redis stats cleared")
 
     def sync_counts_from_db(self):
         """
@@ -299,8 +299,8 @@ class RedisCacheManager:
         ).count()
         self.redis_client.set('imaging:in_progress_count', imaging_in_progress)
 
-        print(f"✓ Redis 동기화 완료: 진료 대기 {clinic_waiting}, 진료중 {clinic_in_progress}, "
-              f"촬영 대기 {imaging_waiting}, 촬영중 {imaging_in_progress}")
+        print(f"[OK] Redis synced - Clinic waiting: {clinic_waiting}, in progress: {clinic_in_progress}, "
+              f"Imaging waiting: {imaging_waiting}, in progress: {imaging_in_progress}")
 
 
 # 싱글톤 인스턴스
