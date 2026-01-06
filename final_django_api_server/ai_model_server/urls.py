@@ -1,5 +1,5 @@
 from django.urls import path
-from .views import CreateSegmentationMaskView, SegmentationTaskStatusView
+from .views import CreateSegmentationMaskView, SegmentationTaskStatusView, CreateFeatureExtractionView, FeatureExtractionTaskStatusView
 
 from .views import BentoMLHealthView, PredictStageView, PredictRelapseView, PredictSurvivalView, PredictAllView
 
@@ -8,6 +8,8 @@ urlpatterns = [
     # AI Segmentation via Mosec
     path('mosec/segmentation/create/', CreateSegmentationMaskView.as_view(), name='create_segmentation'),
     path('mosec/segmentation/status/<str:task_id>/', SegmentationTaskStatusView.as_view(), name='segmentation_status'),
+    path('mosec/extract-feature/', CreateFeatureExtractionView.as_view(), name='extract_feature'),
+    path('mosec/extract-feature/status/<str:task_id>/', FeatureExtractionTaskStatusView.as_view(), name='extract_feature_status'),
     
     # AI Predictive Analysis via BentoML
     # Health check

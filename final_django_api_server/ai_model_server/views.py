@@ -2,7 +2,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import AllowAny
-from .tasks import process_segmentation
+from .tasks import process_segmentation, process_feature_extraction
 
 import requests
 from django.conf import settings
@@ -100,6 +100,97 @@ class SegmentationTaskStatusView(APIView):
         except Exception as e:
             return Response({
                 'error': 'Failed to fetch task status',
+                'details': str(e)
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class FeatureExtractionTaskStatusView(APIView):
+    """
+    Feature extraction Celery Task의 상태를 조회하는 API
+    """
+    permission_classes = [AllowAny]
+
+    def get(self, request, task_id):
+        """
+        Task ID로 작업 상태 조회
+        """
+        try:
+            from celery.result import AsyncResult
+
+            task_result = AsyncResult(task_id)
+
+            response_data = {
+                'task_id': task_id,
+                'status': task_result.state,
+            }
+
+            if task_result.state == 'PENDING':
+                response_data['message'] = 'Task is waiting to be processed'
+            elif task_result.state == 'PROGRESS':
+                response_data['progress'] = task_result.info
+            elif task_result.state == 'SUCCESS':
+                response_data['result'] = task_result.result
+            elif task_result.state == 'FAILURE':
+                response_data['error'] = str(task_result.info)
+            else:
+                response_data['message'] = f'Task state: {task_result.state}'
+
+            return Response(response_data, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            return Response({
+                'error': 'Failed to fetch task status',
+                'details': str(e)
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class CreateFeatureExtractionView(APIView):
+    """
+    AI 모델을 사용하여 DICOM Series 특징 추출을 수행하는 API
+    """
+    authentication_classes = []
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        """
+        SeriesInstanceUID를 받아서 Celery Task를 생성하고 AI 처리를 시작
+
+        Request Body:
+        {
+            "seriesinstanceuid": "dicom-series-instance-uid"
+        }
+
+        Response:
+        {
+            "task_id": "celery-task-id",
+            "status": "pending",
+            "message": "Feature extraction task started"
+        }
+        """
+        series_instance_uid = (
+            request.data.get('seriesinstanceuid')
+            or request.data.get('SeriesInstanceUID')
+            or request.data.get('series_instance_uid')
+        )
+
+        if not series_instance_uid:
+            return Response({
+                'error': 'seriesinstanceuid is required'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            task = process_feature_extraction.delay(series_instance_uid)
+
+            return Response({
+                'task_id': task.id,
+                'status': 'pending',
+                'message': 'Feature extraction task started',
+                'seriesinstanceuid': series_instance_uid
+            }, status=status.HTTP_202_ACCEPTED)
+
+        except Exception as e:
+            return Response({
+                'error': 'Failed to create task',
                 'details': str(e)
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
