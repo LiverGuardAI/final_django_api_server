@@ -8,6 +8,7 @@ from .views import (
     OrthancSeriesView,
     OrthancSeriesInstancesView,
     OrthancInstanceFileView,
+    OrthancSeriesArchiveView,
     OrthancPatientStudiesView,
     OrthancStudySeriesView,
     OrthancSeriesNiftiView,
@@ -30,6 +31,7 @@ urlpatterns = [
     # Series 관련 - 더 구체적인 패턴을 먼저 배치
     path('series/<str:series_id>/instances/', OrthancSeriesInstancesView.as_view(), name='orthanc_series_instances'),
     path('series/<str:series_id>/nifti/', OrthancSeriesNiftiView.as_view(), name='orthanc_series_nifti'),
+    path('series/<str:series_id>/archive/', OrthancSeriesArchiveView.as_view(), name='orthanc_series_archive'),
     path('series/<str:series_id>/', OrthancSeriesView.as_view(), name='orthanc_series'),
     path('series/', OrthancSeriesListView.as_view(), name='orthanc_series_list'),
 
