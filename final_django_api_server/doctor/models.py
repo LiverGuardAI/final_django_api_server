@@ -238,7 +238,7 @@ class VitalData(models.Model):
 
 class LabResult(models.Model):
     """혈액검사"""
-    
+
     lab_id = models.AutoField(primary_key=True)
     test_date = models.DateField()
     afp = models.DecimalField(max_digits=10, decimal_places=2, blank=True, null=True)
@@ -253,10 +253,10 @@ class LabResult(models.Model):
     albi_grade = models.CharField(max_length=1, blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
     measured_at = models.DateTimeField(blank=True, null=True)
-    
+
     patient = models.ForeignKey(Patient, on_delete=models.CASCADE, db_column='patient_id')
-    encounter = models.ForeignKey(Encounter, on_delete=models.CASCADE, db_column='encounter_id')
-    
+    encounter = models.ForeignKey(Encounter, on_delete=models.SET_NULL, null=True, blank=True, db_column='encounter_id')
+
     class Meta:
         db_table = 'hospital"."lab_results'
 
@@ -356,8 +356,8 @@ class ImagingOrder(models.Model):
     study_uid = models.CharField(max_length=64, blank=True, null=True)
 
     patient = models.ForeignKey('Patient', on_delete=models.CASCADE, db_column='patient_id')
-    encounter = models.ForeignKey('Encounter', on_delete=models.CASCADE, db_column='encounter_id')
+    encounter = models.ForeignKey('Encounter', on_delete=models.SET_NULL, null=True, blank=True, db_column='encounter_id')
     doctor = models.ForeignKey('Doctor', on_delete=models.RESTRICT, db_column='doctor_id')
-    
+
     class Meta:
         db_table = 'hospital"."imaging_orders'
