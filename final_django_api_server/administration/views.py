@@ -286,6 +286,20 @@ class EncounterListView(APIView):
                             'message': f'원무과 프로필을 찾을 수 없습니다: {str(e)}'
                         }, status=status.HTTP_400_BAD_REQUEST)
 
+                    # 1-1. 중복 접수 체크: 이미 대기 중이거나 진료 중인 환자인지 확인
+                    patient_id = request.data.get('patient')
+                    existing_encounter = Encounter.objects.filter(
+                        patient_id=patient_id,
+                        encounter_status__in=['WAITING', 'IN_PROGRESS']
+                    ).first()
+
+                    if existing_encounter:
+                        status_display = '대기 중' if existing_encounter.encounter_status == 'WAITING' else '진료 중'
+                        return Response({
+                            'success': False,
+                            'message': f'해당 환자는 이미 {status_display}입니다. (담당의사: {existing_encounter.doctor.name})'
+                        }, status=status.HTTP_400_BAD_REQUEST)
+
                     # 2. DB에 Encounter 저장
                     encounter = serializer.save(
                         staff_id=staff_id,
@@ -393,6 +407,12 @@ class EncounterDetailView(APIView):
                 new_status = request.data['encounter_status']
                 encounter.encounter_status = new_status
                 updated = True
+
+                # 대기 취소 시 문진표 데이터 삭제
+                if new_status == 'CANCELLED':
+                    encounter.questionnaire_data = None
+                    encounter.questionnaire_status = 'NOT_STARTED'
+                    encounter.chief_complaint = ''
 
             # 주 증상(문진표) 업데이트 - 레거시 지원
             if 'chief_complaint' in request.data:
