@@ -9,6 +9,7 @@ class CreateSegmentationMaskView(APIView):
     """
     AI 모델을 사용하여 DICOM Series에 대한 Segmentation Mask를 생성하는 API
     """
+    authentication_classes = [] 
     permission_classes = [AllowAny]
 
     def post(self, request):

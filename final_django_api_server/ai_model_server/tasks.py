@@ -15,7 +15,7 @@ def process_segmentation(self, series_id):
         Segmentation result with mask series ID
     """
     # Mosec API endpoint
-    mosec_url = os.getenv('MOSEC_BASE_URL', 'http://localhost:8001')
+    mosec_url = os.getenv('MOSEC_BASE_URL', 'http://host.docker.internal:8001')
     endpoint = f'{mosec_url}/ai/mosec/nnU-Net-Seg'
 
     try:

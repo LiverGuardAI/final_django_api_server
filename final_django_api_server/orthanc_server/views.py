@@ -334,6 +334,43 @@ class OrthancInstanceFileView(APIView):
             }, status=status.HTTP_503_SERVICE_UNAVAILABLE)
 
 
+class OrthancSeriesArchiveView(APIView):
+    """Orthanc Series ZIP Archive 다운로드 API"""
+    permission_classes = [AllowAny]
+
+    def get(self, request, series_id):
+        """
+        특정 Series의 모든 DICOM 파일을 ZIP으로 다운로드
+        GET /series/{series_id}/archive
+        """
+        try:
+            response = requests.get(
+                f'{ORTHANC_BASE_URL}/series/{series_id}/archive',
+                timeout=60,
+                stream=True
+            )
+
+            if response.status_code == 200:
+                from django.http import HttpResponse
+                return HttpResponse(
+                    response.content,
+                    content_type='application/zip',
+                    headers={
+                        'Content-Disposition': f'attachment; filename="series_{series_id}.zip"'
+                    }
+                )
+            else:
+                return Response({
+                    'error': f'Archive for series {series_id} not found'
+                }, status=response.status_code)
+
+        except requests.exceptions.RequestException as e:
+            return Response({
+                'error': 'Failed to connect to Orthanc server',
+                'details': str(e)
+            }, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+
 class OrthancPatientStudiesView(APIView):
     """특정 환자의 Studies 목록 조회 API"""
     permission_classes = [AllowAny]
