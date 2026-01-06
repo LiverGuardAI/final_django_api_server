@@ -133,6 +133,12 @@ class Encounter(models.Model):
         CANCELLED = 'CANCELLED', '취소'
         NO_SHOW = 'NO_SHOW', '노쇼'
 
+    class QuestionnaireStatus(models.TextChoices):
+        """문진표 작성 상태"""
+        NOT_STARTED = 'NOT_STARTED', '미작성'
+        IN_PROGRESS = 'IN_PROGRESS', '작성중'
+        COMPLETED = 'COMPLETED', '완료'
+
     encounter_id = models.AutoField(primary_key=True)
     clinic_room = models.CharField(max_length=20, blank=True, null=True)
     encounter_date = models.DateField()
@@ -154,6 +160,17 @@ class Encounter(models.Model):
     lab_recorded = models.BooleanField(default=False)
     ct_recorded = models.BooleanField(default=False)
     next_visit_date = models.DateField(blank=True, null=True)
+
+    # 문진표 관리 필드
+    questionnaire_status = models.CharField(
+        max_length=20,
+        choices=QuestionnaireStatus.choices,
+        default=QuestionnaireStatus.NOT_STARTED,
+        blank=True,
+        null=True
+    )
+    questionnaire_data = models.JSONField(blank=True, null=True)
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     

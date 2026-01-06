@@ -394,9 +394,23 @@ class EncounterDetailView(APIView):
                 encounter.encounter_status = new_status
                 updated = True
 
-            # 주 증상(문진표) 업데이트
+            # 주 증상(문진표) 업데이트 - 레거시 지원
             if 'chief_complaint' in request.data:
                 encounter.chief_complaint = request.data['chief_complaint']
+                updated = True
+
+            # 문진표 데이터 업데이트
+            if 'questionnaire_data' in request.data:
+                encounter.questionnaire_data = request.data['questionnaire_data']
+                encounter.questionnaire_status = 'COMPLETED'
+                # chief_complaint 추출 (의사용 요약)
+                if isinstance(request.data['questionnaire_data'], dict):
+                    encounter.chief_complaint = request.data['questionnaire_data'].get('chief_complaint', '')
+                updated = True
+
+            # 문진표 상태만 변경
+            if 'questionnaire_status' in request.data:
+                encounter.questionnaire_status = request.data['questionnaire_status']
                 updated = True
 
             if updated:
