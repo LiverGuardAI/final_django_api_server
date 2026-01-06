@@ -9,7 +9,6 @@ import nibabel as nib
 import numpy as np
 import os
 import tempfile
-import zipfile
 from django.http import FileResponse
 
 
@@ -47,69 +46,13 @@ class UploadDicomView(APIView):
                 'error': 'No file provided'
             }, status=status.HTTP_400_BAD_REQUEST)
 
-        file_name = uploaded_file.name.lower()
-
-        # DICOM 또는 ZIP 파일 확장자 검증
-        if not (file_name.endswith('.dcm') or file_name.endswith('.dicom') or file_name.endswith('.zip')):
+        # DICOM 파일 확장자 검증
+        if not (uploaded_file.name.endswith('.dcm') or uploaded_file.name.endswith('.dicom')):
             return Response({
-                'error': 'Only DICOM files (.dcm, .dicom) or ZIP archives (.zip) are allowed'
+                'error': 'Only DICOM files (.dcm, .dicom) are allowed'
             }, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            if file_name.endswith('.zip'):
-                with zipfile.ZipFile(uploaded_file) as zip_ref:
-                    dicom_entries = [
-                        entry for entry in zip_ref.infolist()
-                        if not entry.is_dir()
-                        and entry.filename.lower().endswith(('.dcm', '.dicom'))
-                    ]
-
-                    if not dicom_entries:
-                        return Response({
-                            'error': 'No DICOM files found in ZIP archive'
-                        }, status=status.HTTP_400_BAD_REQUEST)
-
-                    successes = []
-                    errors = []
-
-                    for entry in dicom_entries:
-                        try:
-                            with zip_ref.open(entry) as dicom_file:
-                                file_content = dicom_file.read()
-
-                            orthanc_response = requests.post(
-                                f'{ORTHANC_BASE_URL}/instances',
-                                data=file_content,
-                                headers={
-                                    'Content-Type': 'application/dicom'
-                                },
-                                timeout=30
-                            )
-
-                            if orthanc_response.status_code == 200:
-                                successes.append(orthanc_response.json())
-                            else:
-                                errors.append({
-                                    'file': entry.filename,
-                                    'error': orthanc_response.text
-                                })
-                        except Exception as exc:
-                            errors.append({
-                                'file': entry.filename,
-                                'error': str(exc)
-                            })
-
-                    response_payload = {
-                        'Status': 'Success' if not errors else 'PartialSuccess',
-                        'Count': len(successes),
-                        'Instances': successes,
-                        'Errors': errors
-                    }
-                    return Response(
-                        response_payload,
-                        status=status.HTTP_200_OK if not errors else status.HTTP_207_MULTI_STATUS
-                    )
-
             # 파일 내용 읽기
             file_content = uploaded_file.read()
 
