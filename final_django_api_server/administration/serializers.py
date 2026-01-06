@@ -96,6 +96,11 @@ class AppointmentCreateSerializer(serializers.ModelSerializer):
 class EncounterSerializer(serializers.ModelSerializer):
     """진료 기록 조회용"""
     patient_name = serializers.CharField(source='patient.name', read_only=True)
+    patient_id = serializers.CharField(source='patient.patient_id', read_only=True)
+    date_of_birth = serializers.DateField(source='patient.date_of_birth', read_only=True)
+    age = serializers.IntegerField(source='patient.age', read_only=True)
+    gender = serializers.CharField(source='patient.gender', read_only=True)
+    phone = serializers.CharField(source='patient.phone', read_only=True)
     doctor_name = serializers.CharField(source='doctor.name', read_only=True)
     questionnaire_status_display = serializers.CharField(source='get_questionnaire_status_display', read_only=True)
 

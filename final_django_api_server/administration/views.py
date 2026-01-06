@@ -464,8 +464,37 @@ class WaitingQueueView(APIView):
 
     def get(self, request):
         max_count = int(request.query_params.get('max_count', 50))
+        limit = int(request.query_params.get('limit', 50))  # 추가: limit 파라미터
+        doctor_id = request.query_params.get('doctor_id', None)  # 추가: 의사 필터링
 
-        # Redis에서 대기열 캐시 조회 (TTL 5초)
+        # doctor_id가 있으면 캐시를 사용하지 않고 직접 DB 조회
+        if doctor_id:
+            queryset = Encounter.objects.filter(
+                encounter_status__in=['WAITING', 'IN_PROGRESS', 'COMPLETED']
+            ).select_related('patient', 'doctor', 'doctor__department')
+
+            # 의사 필터링
+            queryset = queryset.filter(doctor_id=doctor_id)
+
+            # 날짜 필터링 (오늘 날짜)
+            from datetime import date
+            today = date.today()
+            queryset = queryset.filter(encounter_date=today)
+
+            # 통계 계산 (슬라이싱 전에 수행)
+            total_waiting = queryset.filter(encounter_status='WAITING').count()
+
+            # 정렬 및 제한
+            queryset = queryset.order_by('-created_at')[:limit]
+
+            serializer = EncounterSerializer(queryset, many=True)
+
+            return Response({
+                'queue': serializer.data,
+                'total_waiting': total_waiting
+            }, status=status.HTTP_200_OK)
+
+        # 기존 로직: Redis 캐시 사용
         cache_key = 'waiting_queue_list'
         cached_queue = cache_manager.redis_client.get(cache_key)
 
@@ -581,6 +610,32 @@ class DashboardStatsView(APIView):
         Returns:
         - 진료실, 촬영실, 검사실 대기/진행 인원
         """
+        doctor_id = request.query_params.get('doctor_id', None)
+
+        # doctor_id가 있으면 해당 의사의 통계만 반환
+        if doctor_id:
+            from datetime import date
+            today = date.today()
+
+            # 해당 의사의 오늘 encounter 조회
+            queryset = Encounter.objects.filter(
+                doctor_id=doctor_id,
+                encounter_date=today
+            )
+
+            clinic_waiting = queryset.filter(encounter_status='WAITING').count()
+            clinic_in_progress = queryset.filter(encounter_status='IN_PROGRESS').count()
+            completed_today = queryset.filter(encounter_status='COMPLETED').count()
+            total_patients = queryset.count()
+
+            return Response({
+                'total_patients': total_patients,
+                'clinic_waiting': clinic_waiting,
+                'clinic_in_progress': clinic_in_progress,
+                'completed_today': completed_today,
+            }, status=status.HTTP_200_OK)
+
+        # 기존 로직: 전체 통계
         stats = cache_manager.get_dashboard_stats()
 
         # RabbitMQ 큐 길이도 함께 반환

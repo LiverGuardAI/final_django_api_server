@@ -83,8 +83,8 @@ class DoctorLoginView(APIView):
             # Doctor의 연결된 User 정보 가져오기
             user = doctor.user
 
-            # 역할이 doctor인지 확인
-            if user.role != 'doctor':
+            # 역할이 doctor인지 확인 (대소문자 구분 없이)
+            if user.role.upper() != 'DOCTOR':
                 return Response(
                     {'error': '의사 계정이 아닙니다.'},
                     status=status.HTTP_403_FORBIDDEN
@@ -107,7 +107,11 @@ class DoctorLoginView(APIView):
                     'doctor_id': doctor.doctor_id,
                     'name': doctor.name,
                     'employee_no': doctor.employee_no,
-                    'department': doctor.department.dept_name if doctor.department else None,
+                    'department': {
+                        'dept_id': doctor.department.department_id,
+                        'dept_name': doctor.department.dept_name,
+                    } if doctor.department else None,
+                    'room_number': doctor.room_number,
                 }
             }, status=status.HTTP_200_OK)
 
@@ -231,7 +235,7 @@ class RadiologyLoginView(APIView):
                 raise Radiology.DoesNotExist
 
             user = radiology.user
-            if user.role != 'radiologist':
+            if user.role.upper() != 'RADIOLOGIST':
                 return Response(
                     {'error': '영상의학과 계정이 아닙니다.'},
                     status=status.HTTP_403_FORBIDDEN

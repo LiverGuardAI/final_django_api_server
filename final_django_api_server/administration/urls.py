@@ -32,6 +32,7 @@ urlpatterns = [
     path('encounters/<int:encounter_id>/', EncounterDetailView.as_view(), name='encounter_detail'),
 
     # 대기열 관리 (Queue + Cache)
-    path('queue/waiting/', WaitingQueueView.as_view(), name='waiting_queue'),
+    path('queue/', WaitingQueueView.as_view(), name='waiting_queue'),  # /api/administration/queue/
+    path('queue/waiting/', WaitingQueueView.as_view(), name='waiting_queue_alt'),  # 하위 호환성 유지
     path('queue/call-next/', CallNextPatientView.as_view(), name='call_next_patient'),
 ]
