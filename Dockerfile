@@ -34,4 +34,4 @@ RUN python manage.py collectstatic --noinput || true
 EXPOSE 8000
 
 # Default command (will be overridden by docker-compose)
-CMD ["gunicorn", "liverguard_api_server.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "4", "--timeout", "120"]
+CMD ["daphne", "-b", "0.0.0.0", "-p", "8000", "liverguard_api_server.asgi:application"]
