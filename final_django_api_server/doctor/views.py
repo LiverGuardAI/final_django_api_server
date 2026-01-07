@@ -3,8 +3,12 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from accounts.permissions import IsDoctor
-from .models import Encounter, Patient, Doctor
-from .serializers import EncounterSerializer, UpdateEncounterStatusSerializer, DoctorListSerializer
+from .models import Encounter, Patient, Doctor, LabResult, ImagingOrder, HCCDiagnosis
+from .serializers import (
+    EncounterSerializer, UpdateEncounterStatusSerializer, DoctorListSerializer,
+    EncounterDetailSerializer, LabResultSerializer, ImagingOrderSerializer,
+    HCCDiagnosisSerializer
+)
 from datetime import date, datetime
 from django.utils import timezone
 
@@ -206,6 +210,176 @@ class DoctorListView(APIView):
                 'results': serializer.data
             }, status=status.HTTP_200_OK)
 
+        except Exception as e:
+            return Response({
+                'error': str(e)
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class EncounterDetailView(APIView):
+    """Encounter 상세 정보 조회 API"""
+    permission_classes = [IsDoctor]
+
+    def get(self, request, encounter_id):
+        """
+        특정 Encounter 상세 정보 조회 (환자 정보 포함)
+        """
+        try:
+            doctor = Doctor.objects.get(user=request.user)
+            encounter = Encounter.objects.select_related('patient', 'doctor', 'staff', 'diagnosis_type').get(
+                encounter_id=encounter_id,
+                doctor=doctor
+            )
+
+            serializer = EncounterDetailSerializer(encounter)
+            return Response(serializer.data, status=status.HTTP_200_OK)
+
+        except Doctor.DoesNotExist:
+            return Response({
+                'error': '의사 정보를 찾을 수 없습니다.'
+            }, status=status.HTTP_404_NOT_FOUND)
+        except Encounter.DoesNotExist:
+            return Response({
+                'error': '해당 진료 기록을 찾을 수 없습니다.'
+            }, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            return Response({
+                'error': str(e)
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class PatientEncounterHistoryView(APIView):
+    """특정 환자의 과거 진료 기록 목록 조회 API"""
+    permission_classes = [IsDoctor]
+
+    def get(self, request, patient_id):
+        """
+        특정 환자의 과거 진료 기록 목록 조회
+        """
+        try:
+            encounters = Encounter.objects.filter(
+                patient_id=patient_id
+            ).select_related('doctor', 'staff', 'diagnosis_type').order_by('-encounter_date', '-encounter_time')
+
+            # 최근 N개만 조회 (선택적)
+            limit = request.query_params.get('limit', None)
+            if limit:
+                encounters = encounters[:int(limit)]
+
+            serializer = EncounterDetailSerializer(encounters, many=True)
+            return Response({
+                'count': encounters.count(),
+                'results': serializer.data
+            }, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            return Response({
+                'error': str(e)
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class PatientLabResultsView(APIView):
+    """특정 환자의 혈액 검사 결과 목록 조회 API"""
+    permission_classes = [IsDoctor]
+
+    def get(self, request, patient_id):
+        """
+        특정 환자의 혈액 검사 결과 목록 조회
+        """
+        try:
+            lab_results = LabResult.objects.filter(
+                patient_id=patient_id
+            ).order_by('-test_date')
+
+            # 최근 N개만 조회 (선택적)
+            limit = request.query_params.get('limit', None)
+            if limit:
+                lab_results = lab_results[:int(limit)]
+
+            serializer = LabResultSerializer(lab_results, many=True)
+            return Response({
+                'count': lab_results.count(),
+                'results': serializer.data
+            }, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            return Response({
+                'error': str(e)
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class PatientImagingOrdersView(APIView):
+    """특정 환자의 영상 검사 오더 목록 조회 API"""
+    permission_classes = [IsDoctor]
+
+    def get(self, request, patient_id):
+        """
+        특정 환자의 영상 검사 오더 목록 조회
+        """
+        try:
+            imaging_orders = ImagingOrder.objects.filter(
+                patient_id=patient_id
+            ).select_related('doctor').order_by('-ordered_at')
+
+            # 최근 N개만 조회 (선택적)
+            limit = request.query_params.get('limit', None)
+            if limit:
+                imaging_orders = imaging_orders[:int(limit)]
+
+            serializer = ImagingOrderSerializer(imaging_orders, many=True)
+            return Response({
+                'count': imaging_orders.count(),
+                'results': serializer.data
+            }, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            return Response({
+                'error': str(e)
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class PatientHCCDiagnosisView(APIView):
+    """특정 환자의 HCC 진단 정보 조회 API"""
+    permission_classes = [IsDoctor]
+
+    def get(self, request, patient_id):
+        """
+        특정 환자의 HCC 진단 정보 조회
+        """
+        try:
+            hcc_diagnoses = HCCDiagnosis.objects.filter(
+                patient_id=patient_id
+            ).order_by('-hcc_diagnosis_date')
+
+            serializer = HCCDiagnosisSerializer(hcc_diagnoses, many=True)
+            return Response({
+                'count': hcc_diagnoses.count(),
+                'results': serializer.data
+            }, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            return Response({
+                'error': str(e)
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class DoctorInfoView(APIView):
+    """현재 로그인한 의사 정보 조회 API"""
+    permission_classes = [IsDoctor]
+
+    def get(self, request):
+        """
+        현재 로그인한 의사의 상세 정보 조회
+        """
+        try:
+            doctor = Doctor.objects.select_related('department').get(user=request.user)
+            serializer = DoctorListSerializer(doctor)
+            return Response(serializer.data, status=status.HTTP_200_OK)
+
+        except Doctor.DoesNotExist:
+            return Response({
+                'error': '의사 정보를 찾을 수 없습니다.'
+            }, status=status.HTTP_404_NOT_FOUND)
         except Exception as e:
             return Response({
                 'error': str(e)
