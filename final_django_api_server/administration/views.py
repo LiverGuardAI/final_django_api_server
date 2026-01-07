@@ -13,11 +13,43 @@ from .serializers import (
 )
 from django.db.models import Q, Count
 from datetime import date, datetime
-from .queue_manager import queue_manager
 from .cache_manager import cache_manager
 from django.db import transaction
 from channels.layers import get_channel_layer
-from asgiref.sync import async_to_sync  
+from asgiref.sync import async_to_sync
+
+
+def send_queue_update_websocket(message="대기열이 업데이트되었습니다.", extra_data=None):
+    """
+    WebSocket을 통해 대기열 변경 알림을 전송하는 헬퍼 함수
+
+    Args:
+        message: 전송할 메시지
+        extra_data: 추가 데이터 (dict)
+    """
+    try:
+        waiting_count = cache_manager.get_waiting_count('clinic')
+        in_progress_count = cache_manager.get_in_progress_count('clinic')
+
+        channel_layer = get_channel_layer()
+        data = {
+            "waiting_count": waiting_count,
+            "in_progress_count": in_progress_count,
+        }
+
+        if extra_data:
+            data.update(extra_data)
+
+        async_to_sync(channel_layer.group_send)(
+            "clinic_dashboard",
+            {
+                "type": "update_queue",
+                "message": message,
+                "data": data
+            }
+        )
+    except Exception as e:
+        print(f"!!! WebSocket 전송 실패: {e}")
 
 
 class AdministrationDashboardView(APIView):
@@ -300,10 +332,11 @@ class EncounterListView(APIView):
                             'message': f'해당 환자는 이미 {status_display}입니다. (담당의사: {existing_encounter.doctor.name})'
                         }, status=status.HTTP_400_BAD_REQUEST)
 
-                    # 2. DB에 Encounter 저장
+                    # 2. DB에 Encounter 저장 (checkin_time 설정)
                     encounter = serializer.save(
                         staff_id=staff_id,
-                        encounter_status=Encounter.EncounterStatus.WAITING
+                        encounter_status=Encounter.EncounterStatus.WAITING,
+                        checkin_time=datetime.now()  # 대기열 진입 시간 기록
                     )
 
                     # 3. 환자 상태 업데이트
@@ -311,49 +344,24 @@ class EncounterListView(APIView):
                     patient.current_status = Patient.PatientStatus.WAITING_CLINIC
                     patient.save()
 
-                    # 4. RabbitMQ 대기열에 추가 (여기가 실패하면 위 DB 저장도 취소됨)
-                    priority = request.data.get('priority', 5)
-                    
-                    # queue_manager 내부에서 에러가 나면 여기서 catch되어 rollback 됩니다.
-                    queue_success = queue_manager.add_to_queue(
-                        encounter_id=encounter.encounter_id,
-                        patient_id=patient.patient_id,
-                        patient_name=patient.name,
-                        priority=priority
-                    )
-
-                    # 큐에 넣는 걸 실패했다면 강제로 에러를 발생시켜 DB를 롤백시킵니다.
-                    if not queue_success:
-                        raise Exception("RabbitMQ 대기열 추가 실패")
-
-                    # 5. Redis 대기 카운트 증가 (여기는 성공했을 때만 실행됨)
+                    # 4. Redis 대기 카운트 증가
                     cache_manager.increment_waiting_count('clinic')
                     cache_manager.set_patient_status(
                         patient.patient_id,
                         Patient.PatientStatus.WAITING_CLINIC
                     )
 
-                # 6. 현재 대기 인원 조회 (WebSocket 전송 전에 먼저 조회)
-                waiting_count = cache_manager.get_waiting_count('clinic')
-
-                # Redis 캐시 무효화 (대기열 변경)
+                # 5. Redis 캐시 무효화 (대기열 변경)
                 cache_manager.redis_client.delete('waiting_queue_list')
 
-                # 채널 레이어 가져오기
-                channel_layer = get_channel_layer()
-
-                # 'administration' 그룹에 메시지 발송
-                async_to_sync(channel_layer.group_send)(
-                    "clinic_dashboard",  # 그룹 이름 (프론트와 맞춰야 함)
-                    {
-                        "type": "update_queue",  # 프론트에서 처리할 이벤트 타입
-                        "message": "새로운 환자가 접수되었습니다.",
-                        "data": {
-                            "waiting_count": waiting_count,
-                            "new_patient": {
-                                "name": patient.name,
-                                "id": patient.patient_id
-                            }
+                # 6. WebSocket으로 실시간 알림 전송
+                waiting_count = cache_manager.get_waiting_count('clinic')
+                send_queue_update_websocket(
+                    message="새로운 환자가 접수되었습니다.",
+                    extra_data={
+                        "new_patient": {
+                            "name": patient.name,
+                            "id": patient.patient_id
                         }
                     }
                 )
@@ -370,7 +378,7 @@ class EncounterListView(APIView):
                 }, status=status.HTTP_201_CREATED)
 
             except Exception as e:
-                # RabbitMQ나 로직에서 에러가 발생하면 여기로 옴
+                # 로직에서 에러가 발생하면 여기로 옴 (트랜잭션 롤백)
                 print(f"!!! 접수 트랜잭션 롤백됨: {e}")
                 return Response({
                     'success': False,
@@ -436,9 +444,28 @@ class EncounterDetailView(APIView):
             if updated:
                 encounter.save()
 
-                # 대기열 상태 변경 시 캐시 무효화
+                # 대기열 상태 변경 시 캐시 무효화 + WebSocket 알림
                 if 'encounter_status' in request.data:
                     cache_manager.redis_client.delete('waiting_queue_list')
+
+                    # WebSocket으로 실시간 알림 전송
+                    status_display = {
+                        'WAITING': '대기중',
+                        'IN_PROGRESS': '진료중',
+                        'COMPLETED': '완료',
+                        'CANCELLED': '취소'
+                    }.get(new_status, new_status)
+
+                    send_queue_update_websocket(
+                        message=f"환자 상태 변경: {encounter.patient.name} ({status_display})",
+                        extra_data={
+                            "updated_encounter": {
+                                "id": encounter.encounter_id,
+                                "patient_name": encounter.patient.name,
+                                "status": new_status
+                            }
+                        }
+                    )
 
                 return Response(
                     {
@@ -484,8 +511,8 @@ class WaitingQueueView(APIView):
             # 통계 계산 (슬라이싱 전에 수행)
             total_waiting = queryset.filter(encounter_status='WAITING').count()
 
-            # 정렬 및 제한
-            queryset = queryset.order_by('-created_at')[:limit]
+            # 정렬 및 제한 (checkin_time 기준 FIFO)
+            queryset = queryset.order_by('checkin_time')[:limit]
 
             serializer = EncounterSerializer(queryset, many=True)
 
@@ -510,10 +537,11 @@ class WaitingQueueView(APIView):
                 'queue': queue_data[:max_count]
             }, status=status.HTTP_200_OK)
 
-        # 캐시 미스: DB에서 조회 후 Redis에 저장
+        # 캐시 미스: DB에서 조회 후 Redis에 저장 (checkin_time 기준 FIFO)
+        # WAITING과 IN_PROGRESS 모두 포함 (원무과 대기열 화면용)
         waiting_encounters = Encounter.objects.filter(
-            encounter_status='WAITING'
-        ).select_related('patient', 'doctor', 'doctor__department').order_by('created_at')[:max_count]
+            encounter_status__in=['WAITING', 'IN_PROGRESS']
+        ).select_related('patient', 'doctor', 'doctor__department').order_by('checkin_time')[:max_count]
 
         serializer = EncounterSerializer(waiting_encounters, many=True)
         queue_data = serializer.data
@@ -537,7 +565,7 @@ class CallNextPatientView(APIView):
 
     def post(self, request):
         """
-        다음 대기 환자 호출
+        다음 대기 환자 호출 (DB 기반)
 
         Returns:
         - 다음 환자 정보
@@ -545,58 +573,66 @@ class CallNextPatientView(APIView):
         - Patient를 IN_CLINIC으로 변경
         - Redis 카운트 조정
         """
-        # 1. RabbitMQ에서 다음 환자 가져오기
-        next_patient = queue_manager.get_next_patient()
+        # 1. DB에서 가장 오래 대기 중인 환자 가져오기 (FIFO - checkin_time 기준)
+        encounter = Encounter.objects.filter(
+            encounter_status=Encounter.EncounterStatus.WAITING
+        ).select_related('patient').order_by('checkin_time').first()
 
-        if not next_patient:
+        if not encounter:
             return Response({
                 'success': False,
                 'message': '대기 중인 환자가 없습니다.'
             }, status=status.HTTP_200_OK)
 
         # 2. Encounter 상태 업데이트
-        try:
-            encounter = Encounter.objects.get(pk=next_patient['encounter_id'])
-            encounter.encounter_status = Encounter.EncounterStatus.IN_PROGRESS
-            encounter.encounter_start = datetime.now().time()
-            encounter.save()
+        encounter.encounter_status = Encounter.EncounterStatus.IN_PROGRESS
+        encounter.encounter_start = datetime.now().time()
+        encounter.save()
 
-            # 3. Patient 상태 업데이트
-            patient = encounter.patient
-            patient.current_status = Patient.PatientStatus.IN_CLINIC
-            patient.save()
+        # 3. Patient 상태 업데이트
+        patient = encounter.patient
+        patient.current_status = Patient.PatientStatus.IN_CLINIC
+        patient.save()
 
-            # 4. Redis 카운트 업데이트
-            cache_manager.decrement_waiting_count('clinic')
-            cache_manager.increment_in_progress_count('clinic')
-            cache_manager.set_patient_status(patient.patient_id, Patient.PatientStatus.IN_CLINIC)
+        # 4. Redis 카운트 업데이트
+        cache_manager.decrement_waiting_count('clinic')
+        cache_manager.increment_in_progress_count('clinic')
+        cache_manager.set_patient_status(patient.patient_id, Patient.PatientStatus.IN_CLINIC)
 
-            # 5. 현재 통계 조회
-            waiting_count = cache_manager.get_waiting_count('clinic')
-            in_progress_count = cache_manager.get_in_progress_count('clinic')
+        # 5. Redis 캐시 무효화 (대기열 변경)
+        cache_manager.redis_client.delete('waiting_queue_list')
 
-            return Response({
-                'success': True,
-                'message': f'다음 환자: {patient.name}',
-                'patient': {
-                    'patient_id': patient.patient_id,
-                    'name': patient.name,
-                    'age': patient.age,
-                    'gender': patient.gender,
-                    'chief_complaint': encounter.chief_complaint
-                },
-                'encounter': EncounterSerializer(encounter).data,
-                'stats': {
-                    'waiting': waiting_count,
-                    'in_progress': in_progress_count
+        # 6. WebSocket으로 실시간 알림 전송
+        send_queue_update_websocket(
+            message=f"환자 호출: {patient.name}",
+            extra_data={
+                "called_patient": {
+                    "name": patient.name,
+                    "id": patient.patient_id
                 }
-            }, status=status.HTTP_200_OK)
+            }
+        )
 
-        except Encounter.DoesNotExist:
-            return Response({
-                'success': False,
-                'message': f'Encounter ID {next_patient["encounter_id"]}를 찾을 수 없습니다.'
-            }, status=status.HTTP_404_NOT_FOUND)
+        # 7. 현재 통계 조회
+        waiting_count = cache_manager.get_waiting_count('clinic')
+        in_progress_count = cache_manager.get_in_progress_count('clinic')
+
+        return Response({
+            'success': True,
+            'message': f'다음 환자: {patient.name}',
+            'patient': {
+                'patient_id': patient.patient_id,
+                'name': patient.name,
+                'age': patient.age,
+                'gender': patient.gender,
+                'chief_complaint': encounter.chief_complaint
+            },
+            'encounter': EncounterSerializer(encounter).data,
+            'stats': {
+                'waiting': waiting_count,
+                'in_progress': in_progress_count
+            }
+        }, status=status.HTTP_200_OK)
 
 
 class DashboardStatsView(APIView):
@@ -638,12 +674,8 @@ class DashboardStatsView(APIView):
         # 기존 로직: 전체 통계
         stats = cache_manager.get_dashboard_stats()
 
-        # RabbitMQ 큐 길이도 함께 반환
-        queue_length = queue_manager.get_queue_length()
-
         return Response({
             'success': True,
             'timestamp': datetime.now().isoformat(),
-            'stats': stats,
-            'rabbitmq_queue_length': queue_length
+            'stats': stats
         }, status=status.HTTP_200_OK)

@@ -1,12 +1,18 @@
-# administration/queue_manager.py
+# administration/rabbitmq_manager.py
+#
+# [중요] 이 파일은 현재 사용되지 않습니다.
+# 환자 대기열 관리는 DB + Redis로 처리합니다.
+#
+# 이 RabbitMQ 매니저는 나중에 AI 리포트 작성 등 비동기 작업용으로 사용 예정입니다.
+#
 
 import pika
 import json
 from django.conf import settings
 from datetime import datetime
 
-class WaitingQueueManager:
-    """진료 대기열 관리 클래스 (Singleton Pattern 추천)"""
+class RabbitMQManager:
+    """RabbitMQ 메시지 큐 관리 클래스 (향후 AI 리포트 작성 등에 사용 예정)"""
 
     def __init__(self):
         self.queue_name = 'medical_waiting_queue'
@@ -126,4 +132,4 @@ class WaitingQueueManager:
             return True
         except: return False
 
-queue_manager = WaitingQueueManager()
+# rabbitmq_manager = RabbitMQManager()  # 필요할 때 활성화
