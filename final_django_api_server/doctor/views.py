@@ -221,31 +221,36 @@ class EncounterDetailView(APIView):
     permission_classes = [IsDoctor]
 
     def get(self, request, encounter_id):
-        """
-        특정 Encounter 상세 정보 조회 (환자 정보 포함)
-        """
         try:
-            doctor = Doctor.objects.get(user=request.user)
-            encounter = Encounter.objects.select_related('patient', 'doctor', 'staff', 'diagnosis_type').get(
-                encounter_id=encounter_id,
-                doctor=doctor
-            )
+            # 1. 현재 로그인한 의사 정보 가져오기
+            current_doctor = Doctor.objects.get(user=request.user)
+            
+            # 2. Encounter 조회
+            # doctor=current_doctor 조건을 걸면 객체 비교가 되어 가끔 실패할 수 있음.
+            # 대신, 안전하게 "내가 담당했거나(OR) 담당 의사가 없는 경우"까지 허용하거나
+            # 일단 조건을 풀고 데이터를 가져온 뒤 검증하는 방식이 안전함.
+            
+            encounter = Encounter.objects.select_related(
+                'patient', 'doctor', 'staff', 'diagnosis_type'
+            ).get(encounter_id=encounter_id)
 
+            # 3. 권한 검사 (여기서 403을 명확하게 뱉어줌)
+            # 담당 의사가 지정되어 있는데, 그게 내가 아니라면? -> 403
+            if encounter.doctor and encounter.doctor.doctor_id != current_doctor.doctor_id:
+                return Response({
+                    'error': '본인의 환자가 아닙니다.'
+                }, status=status.HTTP_403_FORBIDDEN)
+
+            # 4. 데이터 반환
             serializer = EncounterDetailSerializer(encounter)
             return Response(serializer.data, status=status.HTTP_200_OK)
 
         except Doctor.DoesNotExist:
-            return Response({
-                'error': '의사 정보를 찾을 수 없습니다.'
-            }, status=status.HTTP_404_NOT_FOUND)
+            return Response({'error': '의사 정보를 찾을 수 없습니다.'}, status=404)
         except Encounter.DoesNotExist:
-            return Response({
-                'error': '해당 진료 기록을 찾을 수 없습니다.'
-            }, status=status.HTTP_404_NOT_FOUND)
+            return Response({'error': '해당 진료 기록을 찾을 수 없습니다.'}, status=404)
         except Exception as e:
-            return Response({
-                'error': str(e)
-            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response({'error': str(e)}, status=500)
 
 
 class PatientEncounterHistoryView(APIView):
