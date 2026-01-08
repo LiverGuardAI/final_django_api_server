@@ -4,6 +4,7 @@ from rest_framework import status
 from rest_framework.permissions import AllowAny
 from rest_framework.parsers import MultiPartParser, FormParser
 import requests
+import io
 import pydicom
 import nibabel as nib
 import numpy as np
@@ -11,6 +12,7 @@ import os
 import tempfile
 import zipfile
 from django.http import FileResponse
+from radiology.models import DICOMSeries, DICOMStudy, RadiologyAIRun
 
 
 # Orthanc 서버 설정
@@ -18,6 +20,93 @@ ORTHANC_BASE_URL = os.getenv(
     'ORTHANC_BASE_URL',
     'http://34.67.62.238/orthanc'  # 기본값 (로컬 개발용)
 )
+
+
+def _extract_dicom_tags(file_content: bytes) -> dict:
+    try:
+        dataset = pydicom.dcmread(
+            io.BytesIO(file_content),
+            stop_before_pixels=True,
+            force=True,
+        )
+    except Exception as exc:
+        print(f"Failed to read DICOM metadata: {exc}")
+        return {}
+
+    def get_value(attr: str):
+        value = getattr(dataset, attr, None)
+        return str(value) if value is not None else None
+
+    return {
+        'PatientID': get_value('PatientID'),
+        'PatientName': get_value('PatientName'),
+        'PatientBirthDate': get_value('PatientBirthDate'),
+        'PatientSex': get_value('PatientSex'),
+        'StudyInstanceUID': get_value('StudyInstanceUID'),
+        'SeriesInstanceUID': get_value('SeriesInstanceUID'),
+        'Modality': get_value('Modality'),
+        'StudyDescription': get_value('StudyDescription'),
+        'InstitutionName': get_value('InstitutionName'),
+        'SeriesNumber': get_value('SeriesNumber'),
+        'SeriesDescription': get_value('SeriesDescription'),
+        'ProtocolName': get_value('ProtocolName'),
+    }
+
+
+def _get_or_create_study(tags: dict, patient_id: str) -> DICOMStudy | None:
+    study_uid = tags.get('StudyInstanceUID')
+    if not study_uid:
+        return None
+    defaults = {
+        'patient_id': patient_id,
+        'modality': tags.get('Modality'),
+        'study_description': tags.get('StudyDescription'),
+        'institution_name': tags.get('InstitutionName'),
+    }
+    study, _ = DICOMStudy.objects.get_or_create(study_uid=study_uid, defaults=defaults)
+    return study
+
+
+def _get_or_create_series(tags: dict, parent_series_id: str | None, study: DICOMStudy) -> DICOMSeries | None:
+    series_uid = tags.get('SeriesInstanceUID')
+    if not series_uid:
+        return None
+    defaults = {
+        'study': study,
+        'orthanc_series_id': parent_series_id,
+        'modality': tags.get('Modality'),
+        'series_number': int(tags.get('SeriesNumber')) if tags.get('SeriesNumber') else None,
+        'series_description': tags.get('SeriesDescription'),
+        'protocol_name': tags.get('ProtocolName'),
+    }
+    series, created = DICOMSeries.objects.get_or_create(series_uid=series_uid, defaults=defaults)
+    if not created and parent_series_id and not series.orthanc_series_id:
+        series.orthanc_series_id = parent_series_id
+        series.save(update_fields=['orthanc_series_id'])
+    return series
+
+
+def _ensure_series_and_run(tags: dict, parent_series_id: str | None, created_series: set) -> None:
+    patient_id = tags.get('PatientID')
+    if not patient_id:
+        print("RadiologyAIRun skipped: patient_id tag missing")
+        return
+
+    study = _get_or_create_study(tags, patient_id)
+    if not study:
+        print("RadiologyAIRun skipped: study tag missing")
+        return
+
+    series = _get_or_create_series(tags, parent_series_id, study)
+    if not series:
+        print("RadiologyAIRun skipped: series tag missing")
+        return
+
+    if series.series_uid in created_series:
+        return
+    created_series.add(series.series_uid)
+    if not RadiologyAIRun.objects.filter(series=series).exists():
+        RadiologyAIRun.objects.create(series=series)
 
 class UploadDicomView(APIView):
     """DICOM 파일을 Orthanc 서버에 업로드하는 프록시 API"""
@@ -72,10 +161,14 @@ class UploadDicomView(APIView):
                     successes = []
                     errors = []
 
+                    created_series = set()
+                    series_candidates = []
+                    seen_candidates = set()
                     for entry in dicom_entries:
                         try:
                             with zip_ref.open(entry) as dicom_file:
                                 file_content = dicom_file.read()
+                            tags = _extract_dicom_tags(file_content)
 
                             orthanc_response = requests.post(
                                 f'{ORTHANC_BASE_URL}/instances',
@@ -87,7 +180,13 @@ class UploadDicomView(APIView):
                             )
 
                             if orthanc_response.status_code == 200:
-                                successes.append(orthanc_response.json())
+                                payload = orthanc_response.json()
+                                successes.append(payload)
+                                parent_series_id = payload.get('ParentSeries')
+                                series_uid = tags.get('SeriesInstanceUID') or parent_series_id
+                                if series_uid and series_uid not in seen_candidates:
+                                    series_candidates.append((tags, parent_series_id))
+                                    seen_candidates.add(series_uid)
                             else:
                                 errors.append({
                                     'file': entry.filename,
@@ -98,6 +197,9 @@ class UploadDicomView(APIView):
                                 'file': entry.filename,
                                 'error': str(exc)
                             })
+
+                    for tags, parent_series_id in series_candidates:
+                        _ensure_series_and_run(tags, parent_series_id, created_series)
 
                     response_payload = {
                         'Status': 'Success' if not errors else 'PartialSuccess',
@@ -112,6 +214,7 @@ class UploadDicomView(APIView):
 
             # 파일 내용 읽기
             file_content = uploaded_file.read()
+            tags = _extract_dicom_tags(file_content)
 
             # Orthanc 서버로 전송
             orthanc_response = requests.post(
@@ -125,10 +228,11 @@ class UploadDicomView(APIView):
 
             # Orthanc 응답 확인
             if orthanc_response.status_code == 200:
-                return Response(
-                    orthanc_response.json(),
-                    status=status.HTTP_200_OK
-                )
+                payload = orthanc_response.json()
+                parent_series_id = payload.get('ParentSeries')
+                created_series = set()
+                _ensure_series_and_run(tags, parent_series_id, created_series)
+                return Response(payload, status=status.HTTP_200_OK)
             else:
                 return Response({
                     'error': 'Orthanc upload failed',
