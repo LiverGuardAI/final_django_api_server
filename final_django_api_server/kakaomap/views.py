@@ -29,6 +29,159 @@ def get_native_app_key(request):
 
 @api_view(['GET'])
 @permission_classes([AllowAny])
+def get_rest_api_key(request):
+    """
+    카카오 REST API 키 반환
+    Flutter 앱에서 장소 검색 시 사용
+    """
+    rest_api_key = os.getenv('KAKAO_REST_API_KEY', '')
+
+    if not rest_api_key:
+        return Response({
+            'error': 'Kakao REST API Key not configured'
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    return Response({
+        'rest_api_key': rest_api_key
+    }, status=status.HTTP_200_OK)
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def search_nearby_pharmacies(request):
+    """
+    Nearby pharmacy search (default radius 300m, size 15).
+    """
+    latitude = request.GET.get('latitude')
+    longitude = request.GET.get('longitude')
+    radius = request.GET.get('radius', '500')
+
+    if not latitude or not longitude:
+        return Response({
+            'error': 'latitude and longitude are required'
+        }, status=status.HTTP_400_BAD_REQUEST)
+
+    rest_api_key = os.getenv('KAKAO_REST_API_KEY', '')
+    if not rest_api_key:
+        return Response({
+            'error': 'Kakao REST API Key not configured'
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    try:
+        url = 'https://dapi.kakao.com/v2/local/search/keyword.json'
+        headers = {'Authorization': f'KakaoAK {rest_api_key}'}
+        params = {
+            'query': '\uc57d\uad6d',
+            'x': longitude,
+            'y': latitude,
+            'radius': radius,
+            'size': 15,
+            'sort': 'distance'
+        }
+
+        response = requests.get(url, headers=headers, params=params)
+
+        if response.status_code == 200:
+            return Response(response.json(), status=status.HTTP_200_OK)
+        else:
+            return Response({
+                'error': f'Kakao API error: {response.status_code}',
+                'details': response.text
+            }, status=response.status_code)
+
+    except Exception as e:
+        return Response({
+            'error': f'Search failed: {str(e)}'
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def search_pharmacies_by_query(request):
+    """
+    Keyword pharmacy search (size 15).
+    """
+    query = request.GET.get('query')
+
+    if not query:
+        return Response({
+            'error': 'query is required'
+        }, status=status.HTTP_400_BAD_REQUEST)
+
+    rest_api_key = os.getenv('KAKAO_REST_API_KEY', '')
+    if not rest_api_key:
+        return Response({
+            'error': 'Kakao REST API Key not configured'
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    try:
+        url = 'https://dapi.kakao.com/v2/local/search/keyword.json'
+        headers = {'Authorization': f'KakaoAK {rest_api_key}'}
+        params = {
+            'query': f'{query} \uc57d\uad6d',
+            'size': 15
+        }
+
+        response = requests.get(url, headers=headers, params=params)
+
+        if response.status_code == 200:
+            return Response(response.json(), status=status.HTTP_200_OK)
+        else:
+            return Response({
+                'error': f'Kakao API error: {response.status_code}',
+                'details': response.text
+            }, status=response.status_code)
+
+    except Exception as e:
+        return Response({
+            'error': f'Search failed: {str(e)}'
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def search_place_by_query(request):
+    """
+    Keyword place search (no pharmacy suffix)
+    """
+    query = request.GET.get('query')
+    size = request.GET.get('size', '1')
+
+    if not query:
+        return Response({
+            'error': 'query is required'
+        }, status=status.HTTP_400_BAD_REQUEST)
+
+    rest_api_key = os.getenv('KAKAO_REST_API_KEY', '')
+    if not rest_api_key:
+        return Response({
+            'error': 'Kakao REST API Key not configured'
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    try:
+        url = 'https://dapi.kakao.com/v2/local/search/keyword.json'
+        headers = {'Authorization': f'KakaoAK {rest_api_key}'}
+        params = {
+            'query': query,
+            'size': size
+        }
+
+        response = requests.get(url, headers=headers, params=params)
+
+        if response.status_code == 200:
+            return Response(response.json(), status=status.HTTP_200_OK)
+        else:
+            return Response({
+                'error': f'Kakao API error: {response.status_code}',
+                'details': response.text
+            }, status=response.status_code)
+
+    except Exception as e:
+        return Response({
+            'error': f'Search failed: {str(e)}'
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
 def get_map_html(request):
     """
     카카오맵이 포함된 HTML 페이지 반환
