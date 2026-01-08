@@ -103,6 +103,18 @@ class EncounterSerializer(serializers.ModelSerializer):
     phone = serializers.CharField(source='patient.phone', read_only=True)
     status_display = serializers.CharField(source='get_status_display', read_only=True)
     workflow_state_display = serializers.CharField(source='get_workflow_state_display', read_only=True)
+    questionnaire_status = serializers.SerializerMethodField()
+    questionnaire_data = serializers.SerializerMethodField()
+    
+    def get_questionnaire_status(self, obj):
+        if hasattr(obj, 'questionnaire'):
+            return obj.questionnaire.status
+        return 'NOT_STARTED'
+
+    def get_questionnaire_data(self, obj):
+        if hasattr(obj, 'questionnaire'):
+            return obj.questionnaire.data
+        return None
 
     class Meta:
         model = Encounter
@@ -115,7 +127,7 @@ class EncounterCreateSerializer(serializers.ModelSerializer):
     class Meta:
         model = Encounter
         fields = [
-            'patient', 'appointment', 'status', 'encounter_type',
+            'patient', 'appointment', 'status', 'workflow_state',
             'current_location'
         ]
 

@@ -325,14 +325,18 @@ class EncounterListView(APIView):
                         }, status=status.HTTP_400_BAD_REQUEST)
 
                     # 2. Encounter 생성 (접수)
+                    initial_workflow_state = serializer.validated_data.get('workflow_state', Encounter.WorkflowState.REGISTERED)
+                    
                     encounter = serializer.save(
                         status=Encounter.Status.PLANNED,
-                        workflow_state=Encounter.WorkflowState.REGISTERED,
+                        workflow_state=initial_workflow_state,
                         start_time=datetime.now()  # 방문 시작 시간
                     )
 
-                    # 3. Redis 대기 카운트 증가 (아직 대기열에는 들어가지 않음)
-                    # 진료 대기로 변경되면 그때 증가
+                    # 3. Redis 대기 카운트 증가
+                    # 바로 진료 대기 상태로 접수된 경우 카운트 증가
+                    if initial_workflow_state == Encounter.WorkflowState.WAITING_CLINIC:
+                         cache_manager.increment_waiting_count('clinic')
 
                 # 4. Redis 캐시 무효화
                 cache_manager.redis_client.delete('waiting_queue_list')
@@ -422,6 +426,37 @@ class EncounterDetailView(APIView):
                 encounter.current_location = request.data['current_location']
                 updated = True
 
+            # 문진표 데이터 처리
+            questionnaire_data = request.data.get('questionnaire_data')
+            questionnaire_status = request.data.get('questionnaire_status')
+            
+            if questionnaire_data is not None or questionnaire_status is not None:
+                from doctor.models import Questionnaire
+                
+                # 기존 문진표 가져오기 또는 생성
+                questionnaire, created = Questionnaire.objects.get_or_create(
+                    encounter=encounter,
+                    defaults={
+                        'patient': encounter.patient,
+                        'status': Questionnaire.QStatus.NOT_STARTED,
+                        'data': {}
+                    }
+                )
+                
+                if questionnaire_data is not None:
+                    # null인 경우 (삭제 요청) 처리
+                    if questionnaire_data is None: 
+                         questionnaire.data = {}
+                    else:
+                         questionnaire.data = questionnaire_data
+                    updated = True
+                    
+                if questionnaire_status:
+                    questionnaire.status = questionnaire_status
+                    updated = True
+                    
+                questionnaire.save()
+
             if updated:
                 encounter.save()
 
@@ -485,9 +520,9 @@ class WaitingQueueView(APIView):
         # 캐시 미스: DB에서 조회 후 Redis에 저장 (state_entered_at 기준 FIFO)
         # WAITING_CLINIC과 IN_CLINIC 모두 포함 (원무과 대기열 화면용)
         waiting_encounters = Encounter.objects.filter(
-            status__in=[
-                Encounter.EncounterStatus.WAITING_CLINIC,
-                Encounter.EncounterStatus.IN_CLINIC
+            workflow_state__in=[
+                Encounter.WorkflowState.WAITING_CLINIC,
+                Encounter.WorkflowState.IN_CLINIC
             ]
         ).select_related('patient').order_by('state_entered_at')[:max_count]
 
