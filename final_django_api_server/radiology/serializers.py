@@ -11,7 +11,6 @@ class PatientWaitlistSerializer(serializers.ModelSerializer):
         model = Patient
         fields = [
             'patient_id',
-            'sample_id',
             'name',
             'date_of_birth',
             'age',

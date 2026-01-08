@@ -93,7 +93,6 @@ class Migration(migrations.Migration):
             name='Patient',
             fields=[
                 ('patient_id', models.CharField(max_length=50, primary_key=True, serialize=False)),
-                ('sample_id', models.CharField(blank=True, max_length=100, null=True)),
                 ('name', models.CharField(max_length=100)),
                 ('date_of_birth', models.DateField(blank=True, null=True)),
                 ('age', models.IntegerField(blank=True, null=True)),

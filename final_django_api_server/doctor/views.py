@@ -20,6 +20,27 @@ class DoctorDashboardView(APIView):
     def get(self, request):
         user = request.user
 
+        # 오늘 날짜
+        today = date.today()
+
+        # 대기 환자 (진료 대기)
+        clinic_waiting = Encounter.objects.filter(
+            created_at__date=today,
+            workflow_state=Encounter.WorkflowState.WAITING_CLINIC
+        ).count()
+
+        # 진료 중 환자
+        clinic_in_progress = Encounter.objects.filter(
+            created_at__date=today,
+            workflow_state=Encounter.WorkflowState.IN_CLINIC
+        ).count()
+
+        # 완료 환자
+        completed_today = Encounter.objects.filter(
+            created_at__date=today,
+            workflow_state=Encounter.WorkflowState.COMPLETED
+        ).count()
+
         return Response({
             'message': f'안녕하세요, {user.first_name} 의사님',
             'user': {
@@ -30,9 +51,10 @@ class DoctorDashboardView(APIView):
                 'last_name': user.last_name,
             },
             'stats': {
-                'total_patients': 0,  # 실제 데이터로 대체 필요
-                'today_appointments': 0,
-                'pending_prescriptions': 0,
+                'total_patients': clinic_waiting + clinic_in_progress + completed_today,
+                'clinic_waiting': clinic_waiting,
+                'clinic_in_progress': clinic_in_progress,
+                'completed_today': completed_today,
             }
         }, status=status.HTTP_200_OK)
 
@@ -60,11 +82,16 @@ class QueueListView(APIView):
 
             # 쿼리 파라미터로 상태 필터링 (기본값: WAITING_CLINIC)
             encounter_status = request.query_params.get('status', 'WAITING_CLINIC')
+            doctor_id = request.query_params.get('doctor_id')
 
             # Encounter 조회
             encounters = Encounter.objects.filter(
                 created_at__date=today
             )
+            
+            # 의사별 필터링
+            if doctor_id:
+                encounters = encounters.filter(assigned_doctor_id=doctor_id)
 
             # 상태별 필터링
             if encounter_status == 'ALL':
@@ -80,18 +107,20 @@ class QueueListView(APIView):
             serializer = EncounterSerializer(encounters, many=True)
 
             # 통계 정보
-            waiting_count = Encounter.objects.filter(
-                created_at__date=today,
+            # 통계 정보 (필터링 적용된 기준)
+            base_qs = Encounter.objects.filter(created_at__date=today)
+            if doctor_id:
+                base_qs = base_qs.filter(assigned_doctor_id=doctor_id)
+
+            waiting_count = base_qs.filter(
                 workflow_state=Encounter.WorkflowState.WAITING_CLINIC
             ).count()
 
-            in_progress_count = Encounter.objects.filter(
-                created_at__date=today,
+            in_progress_count = base_qs.filter(
                 workflow_state=Encounter.WorkflowState.IN_CLINIC
             ).count()
 
-            completed_count = Encounter.objects.filter(
-                created_at__date=today,
+            completed_count = base_qs.filter(
                 workflow_state=Encounter.WorkflowState.COMPLETED
             ).count()
 
@@ -235,8 +264,19 @@ class MedicalRecordDetailView(APIView):
             return Response({'error': str(e)}, status=500)
 
 
-# Backward compatibility alias
-EncounterDetailView = MedicalRecordDetailView
+class EncounterDetailView(APIView):
+    """Encounter 상세 정보 조회 API"""
+    permission_classes = [IsDoctor]
+
+    def get(self, request, encounter_id):
+        try:
+            encounter = Encounter.objects.get(encounter_id=encounter_id)
+            serializer = EncounterSerializer(encounter)
+            return Response(serializer.data, status=status.HTTP_200_OK)
+        except Encounter.DoesNotExist:
+            return Response({'error': '해당 방문 기록을 찾을 수 없습니다.'}, status=404)
+        except Exception as e:
+            return Response({'error': str(e)}, status=500)
 
 
 class PatientMedicalRecordHistoryView(APIView):

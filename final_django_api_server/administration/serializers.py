@@ -101,6 +101,7 @@ class EncounterSerializer(serializers.ModelSerializer):
     age = serializers.IntegerField(source='patient.age', read_only=True)
     gender = serializers.CharField(source='patient.gender', read_only=True)
     phone = serializers.CharField(source='patient.phone', read_only=True)
+    doctor_name = serializers.CharField(source='assigned_doctor.name', read_only=True)
     status_display = serializers.CharField(source='get_status_display', read_only=True)
     workflow_state_display = serializers.CharField(source='get_workflow_state_display', read_only=True)
     questionnaire_status = serializers.SerializerMethodField()

@@ -1,4 +1,5 @@
 from django.db import models
+from django.contrib.postgres.indexes import GinIndex
 from accounts.fields import GenderField, DoctorScheduleTypeField
 
 # doctor/models.py
@@ -71,7 +72,6 @@ class Patient(models.Model):
         F = 'F', '여성'
 
     patient_id = models.CharField(max_length=50, primary_key=True)
-    sample_id = models.CharField(max_length=100, blank=True, null=True)
     name = models.CharField(max_length=100)
     date_of_birth = models.DateField(blank=True, null=True)
     age = models.IntegerField(blank=True, null=True)
@@ -83,6 +83,13 @@ class Patient(models.Model):
 
     class Meta:
         db_table = 'hospital"."patient'
+        indexes = [
+            models.Index(fields=['name']),
+            models.Index(fields=['patient_id']),
+            # GIN index for faster text search (requires pg_trgm extension)
+            GinIndex(fields=['name'], name='patient_name_gin', opclasses=['gin_trgm_ops']),
+            GinIndex(fields=['patient_id'], name='patient_id_gin', opclasses=['gin_trgm_ops']),
+        ]
 
     def __str__(self):
         return f"{self.name} ({self.patient_id})"
@@ -158,6 +165,14 @@ class Encounter(models.Model):
         null=True,
         blank=True,
         db_column='appointment_id'
+    )
+    assigned_doctor = models.ForeignKey(
+        'Doctor',
+        on_delete=models.SET_NULL,
+        null=True, # 대기열 배정을 위해 필요하지만, 초기 단계나 에러의 경우 없을 수 있음.
+        blank=True,
+        db_column='assigned_doctor_id', # DB 컬럼명 명시
+        related_name='assigned_encounters'
     )
 
     class Meta:
@@ -394,7 +409,7 @@ class DoctorToRadiologyOrder(models.Model):
     study_uid = models.CharField(max_length=64, blank=True, null=True)
 
     patient = models.ForeignKey('Patient', on_delete=models.CASCADE, db_column='patient_id')
-    medical_record = models.ForeignKey('MedicalRecord', on_delete=models.SET_NULL, null=True, blank=True, db_column='record_id')
+    encounter = models.ForeignKey('Encounter', on_delete=models.CASCADE, db_column='encounter_id', null=True, blank=True)
     doctor = models.ForeignKey('Doctor', on_delete=models.RESTRICT, db_column='doctor_id')
 
 class Meta:

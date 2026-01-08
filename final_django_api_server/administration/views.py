@@ -70,7 +70,7 @@ class AdministrationDashboardView(APIView):
         ).count()
 
         # 오늘 진료 수
-        today_encounters = Encounter.objects.filter(encounter_date=today).count()
+        today_encounters = Encounter.objects.filter(start_time__date=today).count()
 
         return Response({
             'message': f'안녕하세요, {user.first_name} 원무과',
@@ -107,8 +107,7 @@ class PatientListView(APIView):
         if search:
             patients = patients.filter(
                 Q(patient_id__icontains=search) |
-                Q(name__icontains=search) |
-                Q(sample_id__icontains=search)
+                Q(name__icontains=search)
             )
 
         # 총 개수 먼저 계산
@@ -282,12 +281,12 @@ class EncounterListView(APIView):
 
     def get(self, request):
         patient_id = request.query_params.get('patient_id', None)
-        encounters = Encounter.objects.select_related('patient', 'doctor')
+        encounters = Encounter.objects.select_related('patient', 'assigned_doctor')
 
         if patient_id:
             encounters = encounters.filter(patient_id=patient_id)
 
-        encounters = encounters.order_by('-encounter_date', '-encounter_time')
+        encounters = encounters.order_by('-start_time')
         serializer = EncounterSerializer(encounters, many=True)
 
         return Response({
@@ -327,11 +326,15 @@ class EncounterListView(APIView):
                     # 2. Encounter 생성 (접수)
                     initial_workflow_state = serializer.validated_data.get('workflow_state', Encounter.WorkflowState.REGISTERED)
                     
-                    encounter = serializer.save(
-                        status=Encounter.Status.PLANNED,
-                        workflow_state=initial_workflow_state,
-                        start_time=datetime.now()  # 방문 시작 시간
-                    )
+                    # 의사 직접 배정 (assigned_doctor_id 저장)
+                    save_kwargs = {
+                        'status': Encounter.Status.PLANNED,
+                        'workflow_state': initial_workflow_state,
+                        'start_time': datetime.now(),
+                        'assigned_doctor_id': request.data.get('doctor') # 직접 배정
+                    }
+                    
+                    encounter = serializer.save(**save_kwargs)
 
                     # 3. Redis 대기 카운트 증가
                     # 바로 진료 대기 상태로 접수된 경우 카운트 증가
@@ -391,8 +394,25 @@ class EncounterDetailView(APIView):
             old_workflow_state = encounter.workflow_state
             updated = False
 
-            # 워크플로우 상태 변경 (backward compatibility: 'status' 필드도 허용)
-            new_workflow_state = request.data.get('workflow_state') or request.data.get('status')
+            # 워크플로우 상태 변경
+            new_workflow_state = None
+
+            # 1. Frontend API (encounter_status) - 우선 처리
+            encounter_status = request.data.get('encounter_status')
+            if encounter_status:
+                if encounter_status == 'IN_PROGRESS':
+                    new_workflow_state = Encounter.WorkflowState.IN_CLINIC
+                elif encounter_status == 'WAITING':
+                    new_workflow_state = Encounter.WorkflowState.WAITING_CLINIC
+                elif encounter_status == 'COMPLETED':
+                    new_workflow_state = Encounter.WorkflowState.COMPLETED
+                elif encounter_status == 'CANCELLED':
+                    new_workflow_state = Encounter.WorkflowState.CANCELLED
+
+            # 2. Internal / Legacy (workflow_state, status) - Fallback
+            if not new_workflow_state:
+                new_workflow_state = request.data.get('workflow_state') or request.data.get('status')
+
             if new_workflow_state:
                 encounter.workflow_state = new_workflow_state
                 encounter.state_entered_at = datetime.now()  # 상태 진입 시간 갱신
@@ -500,9 +520,14 @@ class WaitingQueueView(APIView):
     def get(self, request):
         max_count = int(request.query_params.get('max_count', 50))
         limit = int(request.query_params.get('limit', 50))
+        doctor_id = request.query_params.get('doctor_id')
 
-        # 기존 로직: Redis 캐시 사용
-        cache_key = 'waiting_queue_list'
+        # Cache key depends on doctor_id to isolate queues
+        if doctor_id:
+            cache_key = f'waiting_queue_list:doctor_{doctor_id}'
+        else:
+            cache_key = 'waiting_queue_list:all'
+
         cached_queue = cache_manager.redis_client.get(cache_key)
 
         if cached_queue:
@@ -519,12 +544,21 @@ class WaitingQueueView(APIView):
 
         # 캐시 미스: DB에서 조회 후 Redis에 저장 (state_entered_at 기준 FIFO)
         # WAITING_CLINIC과 IN_CLINIC 모두 포함 (원무과 대기열 화면용)
-        waiting_encounters = Encounter.objects.filter(
+        queryset = Encounter.objects.filter(
             workflow_state__in=[
                 Encounter.WorkflowState.WAITING_CLINIC,
                 Encounter.WorkflowState.IN_CLINIC
             ]
-        ).select_related('patient').order_by('state_entered_at')[:max_count]
+        ).select_related('patient', 'assigned_doctor').order_by('state_entered_at')
+        
+        if doctor_id:
+             try:
+                 # Encounter에 직접 배정된 의사 정보로 필터링
+                 queryset = queryset.filter(assigned_doctor_id=int(doctor_id))
+             except ValueError:
+                 pass
+
+        waiting_encounters = queryset[:max_count]
 
         serializer = EncounterSerializer(waiting_encounters, many=True)
         queue_data = serializer.data
