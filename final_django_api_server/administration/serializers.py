@@ -1,6 +1,6 @@
 # administration/serializers.py
 from rest_framework import serializers
-from doctor.models import Patient, Appointment, Encounter
+from doctor.models import Patient, Appointment, Encounter, MedicalRecord
 from datetime import date
 
 # ---------------------------------------------------------
@@ -91,9 +91,39 @@ class AppointmentCreateSerializer(serializers.ModelSerializer):
 
 
 # ---------------------------------------------------------
-# 3. Encounter Serializers (기존 유지)
+# 3. Encounter Serializers (방문 세션 관리)
 # ---------------------------------------------------------
 class EncounterSerializer(serializers.ModelSerializer):
+    """방문/진료 세션 조회용"""
+    patient_name = serializers.CharField(source='patient.name', read_only=True)
+    patient_id = serializers.CharField(source='patient.patient_id', read_only=True)
+    date_of_birth = serializers.DateField(source='patient.date_of_birth', read_only=True)
+    age = serializers.IntegerField(source='patient.age', read_only=True)
+    gender = serializers.CharField(source='patient.gender', read_only=True)
+    phone = serializers.CharField(source='patient.phone', read_only=True)
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    workflow_state_display = serializers.CharField(source='get_workflow_state_display', read_only=True)
+
+    class Meta:
+        model = Encounter
+        fields = '__all__'
+        read_only_fields = ['created_at', 'updated_at']
+
+
+class EncounterCreateSerializer(serializers.ModelSerializer):
+    """방문 세션 생성용 (접수 시 사용)"""
+    class Meta:
+        model = Encounter
+        fields = [
+            'patient', 'appointment', 'status', 'encounter_type',
+            'current_location'
+        ]
+
+
+# ---------------------------------------------------------
+# 4. MedicalRecord Serializers (진료 기록)
+# ---------------------------------------------------------
+class MedicalRecordSerializer(serializers.ModelSerializer):
     """진료 기록 조회용"""
     patient_name = serializers.CharField(source='patient.name', read_only=True)
     patient_id = serializers.CharField(source='patient.patient_id', read_only=True)
@@ -105,17 +135,18 @@ class EncounterSerializer(serializers.ModelSerializer):
     questionnaire_status_display = serializers.CharField(source='get_questionnaire_status_display', read_only=True)
 
     class Meta:
-        model = Encounter
+        model = MedicalRecord
         fields = '__all__'
         read_only_fields = ['created_at', 'updated_at']
 
-class EncounterCreateSerializer(serializers.ModelSerializer):
+
+class MedicalRecordCreateSerializer(serializers.ModelSerializer):
     """진료 기록 생성용"""
     class Meta:
-        model = Encounter
+        model = MedicalRecord
         fields = [
-            'encounter_date', 'encounter_time', 'encounter_status',
+            'record_date', 'record_time', 'record_status',
             'department', 'clinic_room', 'is_first_visit', 'chief_complaint',
-            'patient', 'doctor', 'staff',
+            'patient', 'doctor', 'staff', 'encounter',
         ]
         read_only_fields = ['staff']

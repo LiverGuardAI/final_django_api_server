@@ -70,18 +70,6 @@ class Patient(models.Model):
         M = 'M', '남성'
         F = 'F', '여성'
 
-    class PatientStatus(models.TextChoices):
-        """환자의 현재 물리적 위치/상태"""
-        REGISTERED = 'REGISTERED', '접수완료'
-        WAITING_CLINIC = 'WAITING_CLINIC', '진료대기'
-        IN_CLINIC = 'IN_CLINIC', '진료중'
-        WAITING_IMAGING = 'WAITING_IMAGING', '촬영대기'
-        IN_IMAGING = 'IN_IMAGING', '촬영중'
-        WAITING_LAB = 'WAITING_LAB', '검사대기'
-        IN_LAB = 'IN_LAB', '검사중'
-        COMPLETED = 'COMPLETED', '당일진료완료'
-        DISCHARGED = 'DISCHARGED', '퇴원'
-
     patient_id = models.CharField(max_length=50, primary_key=True)
     sample_id = models.CharField(max_length=100, blank=True, null=True)
     name = models.CharField(max_length=100)
@@ -89,22 +77,13 @@ class Patient(models.Model):
     age = models.IntegerField(blank=True, null=True)
     gender = GenderField(choices=Gender.choices, blank=True, null=True)
     phone = models.CharField(max_length=20, blank=True, null=True)
-    current_status = models.CharField(
-        max_length=30,
-        choices=PatientStatus.choices,
-        default=PatientStatus.REGISTERED,
-        blank=True,
-        null=True
-    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-    # doctor 필드 제거: 환자의 담당 의사는 Encounter를 통해 관리
-    # 실제 진료는 Encounter.doctor로 추적 (당직의/대진의/협진 지원)
     profile = models.OneToOneField('patients.UserProfile', on_delete=models.SET_NULL, null=True, blank=True, db_column='profile_id')
-    
+
     class Meta:
         db_table = 'hospital"."patient'
-    
+
     def __str__(self):
         return f"{self.name} ({self.patient_id})"
 
@@ -122,66 +101,129 @@ class DiagnosisType(models.Model):
 
 
 class Encounter(models.Model):
-    """진료 기록"""
+    """방문/진료 세션 (워크플로우 관리)"""
 
-    class EncounterStatus(models.TextChoices):
-        """진료 건의 처리 상태"""
-        SCHEDULED = 'SCHEDULED', '예약됨'
-        WAITING = 'WAITING', '대기중'
-        IN_PROGRESS = 'IN_PROGRESS', '진료중'
+    class Status(models.TextChoices):
+        """FHIR 수준 상태"""
+        PLANNED = 'PLANNED', '계획됨'
+        IN_PROGRESS = 'IN_PROGRESS', '진행중'
         COMPLETED = 'COMPLETED', '완료'
         CANCELLED = 'CANCELLED', '취소'
-        NO_SHOW = 'NO_SHOW', '노쇼'
+        ENTERED_IN_ERROR = 'ENTERED_IN_ERROR', '오류입력'
 
-    class QuestionnaireStatus(models.TextChoices):
-        """문진표 작성 상태"""
-        NOT_STARTED = 'NOT_STARTED', '미작성'
-        IN_PROGRESS = 'IN_PROGRESS', '작성중'
+    class WorkflowState(models.TextChoices):
+        """상세 워크플로우 상태"""
+        REQUESTED = 'REQUESTED', '요청됨'
+        REGISTERED = 'REGISTERED', '접수완료'
+        WAITING_CLINIC = 'WAITING_CLINIC', '진료대기'
+        IN_CLINIC = 'IN_CLINIC', '진료중'
+        WAITING_IMAGING = 'WAITING_IMAGING', '촬영대기'
+        IN_IMAGING = 'IN_IMAGING', '촬영중'
         COMPLETED = 'COMPLETED', '완료'
+        CANCELLED = 'CANCELLED', '취소'
+
+    # Backward compatibility alias
+    EncounterStatus = WorkflowState
 
     encounter_id = models.AutoField(primary_key=True)
-    clinic_room = models.CharField(max_length=20, blank=True, null=True)
-    encounter_date = models.DateField()
-    encounter_time = models.TimeField()
-    encounter_status = models.CharField(
+
+    # 상태 관리
+    status = models.CharField(
         max_length=30,
-        choices=EncounterStatus.choices,
-        default=EncounterStatus.SCHEDULED,
+        choices=Status.choices,
+        default=Status.PLANNED
+    )
+    workflow_state = models.CharField(
+        max_length=30,
+        choices=WorkflowState.choices,
+        default=WorkflowState.REQUESTED
+    )
+
+    # 시간 관리
+    start_time = models.DateTimeField(blank=True, null=True)        # 방문 시작 (접수 시점)
+    end_time = models.DateTimeField(blank=True, null=True)          # 방문 종료 (완료/취소 시점)
+    state_entered_at = models.DateTimeField(auto_now_add=True)      # ⭐ 현재 상태 진입 시간 (대기열 순서용)
+
+    # 위치 및 유형
+    current_location = models.CharField(max_length=50, blank=True, null=True)  # ROOM_403, CT, XRAY 등
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    # Foreign Keys
+    patient = models.ForeignKey(Patient, on_delete=models.CASCADE, db_column='patient_id')
+    appointment = models.ForeignKey(
+        'Appointment',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        db_column='appointment_id'
+    )
+
+    class Meta:
+        db_table = 'hospital"."encounters'
+        ordering = ['state_entered_at']  # FIFO 대기열
+
+    def __str__(self):
+        return f"{self.patient.name} - {self.get_workflow_state_display()}"
+
+
+class MedicalRecord(models.Model):
+    """진료 기록"""
+
+    class RecordStatus(models.TextChoices):
+        """기록 상태"""
+        DRAFT = 'DRAFT', '작성중'
+        COMPLETED = 'COMPLETED', '완료'
+        AMENDED = 'AMENDED', '수정됨'
+
+    # QuestionnaireStatus 제거됨 (별도 모델로 분리)
+
+    record_id = models.AutoField(primary_key=True)
+    clinic_room = models.CharField(max_length=20, blank=True, null=True)
+    record_date = models.DateField()
+    record_time = models.TimeField()
+    record_status = models.CharField(
+        max_length=30,
+        choices=RecordStatus.choices,
+        default=RecordStatus.DRAFT,
         blank=True,
         null=True
     )
     department = models.CharField(max_length=100, blank=True, null=True)
-    checkin_time = models.DateTimeField(blank=True, null=True)
-    encounter_start = models.TimeField(blank=True, null=True)
-    encounter_end = models.TimeField(blank=True, null=True)
+    visit_start = models.TimeField(blank=True, null=True)
+    visit_end = models.TimeField(blank=True, null=True)
     is_first_visit = models.BooleanField(default=False)
     chief_complaint = models.TextField(blank=True, null=True)
     clinical_notes = models.TextField(blank=True, null=True)
     lab_recorded = models.BooleanField(default=False)
     ct_recorded = models.BooleanField(default=False)
-    next_visit_date = models.DateField(blank=True, null=True)
 
-    # 문진표 관리 필드
-    questionnaire_status = models.CharField(
-        max_length=20,
-        choices=QuestionnaireStatus.choices,
-        default=QuestionnaireStatus.NOT_STARTED,
-        blank=True,
-        null=True
-    )
-    questionnaire_data = models.JSONField(blank=True, null=True)
+    # 문진표 관리 필드 제거됨 (Questionnaire 모델로 이동)
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-    
+
+    # Foreign Keys
     patient = models.ForeignKey(Patient, on_delete=models.CASCADE, db_column='patient_id')
     doctor = models.ForeignKey('doctor.Doctor', on_delete=models.RESTRICT, db_column='doctor_id')
     staff = models.ForeignKey('administration.Administration', on_delete=models.RESTRICT, db_column='staff_id')
     diagnosis_type = models.ForeignKey(DiagnosisType, on_delete=models.SET_NULL, null=True, blank=True, db_column='diagnosis_type_id')
-    
+    encounter = models.ForeignKey(
+        Encounter,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        db_column='encounter_id',
+        related_name='medical_records'
+    )
+
     class Meta:
-        db_table = 'hospital"."encounters'
-        ordering = ['-encounter_date', '-encounter_time']
+        db_table = 'hospital"."medical_records'
+        ordering = ['-record_date', '-record_time']
+
+    def __str__(self):
+        return f"{self.patient.name} - {self.record_date}"
 
 
 class Appointment(models.Model):
@@ -207,7 +249,7 @@ class Appointment(models.Model):
 
 class AnthropometricData(models.Model):
     """신체계측"""
-    
+
     anthro_id = models.AutoField(primary_key=True)
     measured_at = models.DateField(blank=True, null=True)
     height = models.DecimalField(max_digits=5, decimal_places=2, blank=True, null=True)
@@ -216,22 +258,22 @@ class AnthropometricData(models.Model):
     is_pregnant = models.BooleanField(default=False)
     smoking_status = models.BooleanField(default=False)
     patient = models.ForeignKey(Patient, on_delete=models.CASCADE, db_column='patient_id')
-    encounter = models.ForeignKey(Encounter, on_delete=models.SET_NULL, null=True, blank=True, db_column='encounter_id')
-    
+    medical_record = models.ForeignKey(MedicalRecord, on_delete=models.SET_NULL, null=True, blank=True, db_column='record_id')
+
     class Meta:
         db_table = 'hospital"."anthropometric_data'
 
 
 class VitalData(models.Model):
     """바이탈"""
-    
+
     vital_id = models.AutoField(primary_key=True)
     measured_at = models.DateField()
     sbp = models.IntegerField(blank=True, null=True)
     dbp = models.IntegerField(blank=True, null=True)
     patient = models.ForeignKey(Patient, on_delete=models.CASCADE, db_column='patient_id')
-    encounter = models.ForeignKey(Encounter, on_delete=models.CASCADE, db_column='encounter_id')
-    
+    medical_record = models.ForeignKey(MedicalRecord, on_delete=models.CASCADE, db_column='record_id')
+
     class Meta:
         db_table = 'hospital"."vital_data'
 
@@ -255,7 +297,7 @@ class LabResult(models.Model):
     measured_at = models.DateTimeField(blank=True, null=True)
 
     patient = models.ForeignKey(Patient, on_delete=models.CASCADE, db_column='patient_id')
-    encounter = models.ForeignKey(Encounter, on_delete=models.SET_NULL, null=True, blank=True, db_column='encounter_id')
+    medical_record = models.ForeignKey(MedicalRecord, on_delete=models.SET_NULL, null=True, blank=True, db_column='record_id')
 
     class Meta:
         db_table = 'hospital"."lab_results'
@@ -263,7 +305,7 @@ class LabResult(models.Model):
 
 class HCCDiagnosis(models.Model):
     """간암 진단"""
-    
+
     hcc_id = models.AutoField(primary_key=True)
     hcc_diagnosis_date = models.DateField()
     ajcc_stage = models.CharField(max_length=10, blank=True, null=True)
@@ -279,10 +321,10 @@ class HCCDiagnosis(models.Model):
     measured_at = models.DateTimeField(blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-    
+
     patient = models.ForeignKey(Patient, on_delete=models.CASCADE, db_column='patient_id')
-    encounter = models.ForeignKey(Encounter, on_delete=models.CASCADE, db_column='encounter_id')
-    
+    medical_record = models.ForeignKey(MedicalRecord, on_delete=models.CASCADE, db_column='record_id')
+
     class Meta:
         db_table = 'hospital"."hcc_diagnosis'
 
@@ -293,13 +335,10 @@ class GenomicData(models.Model):
     genomic_id = models.AutoField(primary_key=True)
     sample_date = models.DateField(blank=True, null=True)
     pathway_scores = models.JSONField(blank=True, null=True)
-    lasso_coefficients = models.JSONField(blank=True, null=True)
-    risk_genes = models.JSONField(blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
     measured_at = models.DateTimeField(blank=True, null=True)
     
     patient = models.ForeignKey(Patient, on_delete=models.CASCADE, db_column='patient_id')
-    sample_id = models.CharField(max_length=100, blank=True, null=True)
     
     class Meta:
         db_table = 'hospital"."genomic_data'
@@ -307,7 +346,7 @@ class GenomicData(models.Model):
 
 class Prescription(models.Model):
     """처방"""
-    
+
     prescription_id = models.AutoField(primary_key=True)
     prescription_date = models.DateField()
     item_seq = models.BigIntegerField()
@@ -318,25 +357,24 @@ class Prescription(models.Model):
     pharmacy_notes = models.TextField(blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
     measured_at = models.DateTimeField(blank=True, null=True)
-    
+
     patient = models.ForeignKey(Patient, on_delete=models.CASCADE, db_column='patient_id')
     encounter = models.ForeignKey(Encounter, on_delete=models.CASCADE, db_column='encounter_id')
     doctor = models.ForeignKey('doctor.Doctor', on_delete=models.RESTRICT, db_column='doctor_id')
     department = models.ForeignKey('accounts.Department', on_delete=models.RESTRICT, db_column='department_id')
-    
+
     class Meta:
         db_table = 'hospital"."prescriptions'
         
-class ImagingOrder(models.Model):
-    """영상 검사 처방"""
+class DoctorToRadiologyOrder(models.Model):
+    """영상 검사 처방 (의사 -> 영상의학과)"""
 
     class ImagingStatus(models.TextChoices):
         """영상 검사 상태"""
         REQUESTED = 'REQUESTED', '요청됨'
         WAITING = 'WAITING', '촬영대기'
         IN_PROGRESS = 'IN_PROGRESS', '촬영중'
-        COMPLETED = 'COMPLETED', '완료'
-        REPORTED = 'REPORTED', '판독완료'
+        COMPLETED = 'COMPLETED', '완료' # 촬영 완료 - dicom 폴더 업로드
         CANCELLED = 'CANCELLED', '취소'
 
     order_id = models.AutoField(primary_key=True)
@@ -356,8 +394,77 @@ class ImagingOrder(models.Model):
     study_uid = models.CharField(max_length=64, blank=True, null=True)
 
     patient = models.ForeignKey('Patient', on_delete=models.CASCADE, db_column='patient_id')
-    encounter = models.ForeignKey('Encounter', on_delete=models.SET_NULL, null=True, blank=True, db_column='encounter_id')
+    medical_record = models.ForeignKey('MedicalRecord', on_delete=models.SET_NULL, null=True, blank=True, db_column='record_id')
     doctor = models.ForeignKey('Doctor', on_delete=models.RESTRICT, db_column='doctor_id')
 
+class Meta:
+        db_table = 'hospital"."doctor_to_radiology_orders'
+
+
+# Alias for backward compatibility
+ImagingOrder = DoctorToRadiologyOrder
+
+
+
+
+class LabOrder(models.Model):
+    """
+    검사 처방 오더
+    - 혈액검사, 유전체검사 등 종류별로 각각의 Row가 생성됩니다.
+    """
+    class OrderType(models.TextChoices):
+        BLOOD_LIVER = 'BLOOD_LIVER', '간기능 혈액검사'  # LFT, CBC 등
+        GENOMIC = 'GENOMIC', '유전체 분석'          # 유전자 3개 분석
+
+    class OrderStatus(models.TextChoices):
+        REQUESTED = 'REQUESTED', '요청됨'
+        IN_PROGRESS = 'IN_PROGRESS', '검사중'
+        COMPLETED = 'COMPLETED', '완료'
+        CANCELLED = 'CANCELLED', '취소'
+
+    order_id = models.AutoField(primary_key=True)
+    
+    # [핵심] 이 오더가 어떤 검사인지 명시
+    order_type = models.CharField(max_length=20, choices=OrderType.choices)
+    
+    status = models.CharField(
+        max_length=20, 
+        choices=OrderStatus.choices, 
+        default=OrderStatus.REQUESTED
+    )
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    # Foreign Keys
+    patient = models.ForeignKey('Patient', on_delete=models.CASCADE)
+    encounter = models.ForeignKey('Encounter', on_delete=models.CASCADE)
+    doctor = models.ForeignKey('Doctor', on_delete=models.RESTRICT)
+
     class Meta:
-        db_table = 'hospital"."imaging_orders'
+        db_table = 'hospital"."lab_orders'
+
+
+class Questionnaire(models.Model):
+    """문진표"""
+    
+    class QStatus(models.TextChoices):
+        NOT_STARTED = 'NOT_STARTED', '미작성'
+        IN_PROGRESS = 'IN_PROGRESS', '작성중'
+        COMPLETED = 'COMPLETED', '완료'
+
+    questionnaire_id = models.AutoField(primary_key=True)
+    
+    # 상태 및 데이터
+    status = models.CharField(max_length=20, choices=QStatus.choices, default=QStatus.NOT_STARTED)
+    data = models.JSONField(default=dict, blank=True)  # 질문-답변 데이터
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    # 관계
+    encounter = models.OneToOneField('Encounter', on_delete=models.CASCADE, related_name='questionnaire')
+    patient = models.ForeignKey('Patient', on_delete=models.CASCADE)
+
+    class Meta:
+        db_table = 'hospital"."questionnaires'

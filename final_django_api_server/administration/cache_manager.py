@@ -273,29 +273,29 @@ class RedisCacheManager:
         if not self.is_connected():
             return
 
-        from doctor.models import Patient, Encounter, ImagingOrder
+        from doctor.models import Encounter
 
         # 진료 대기
-        clinic_waiting = Patient.objects.filter(
-            current_status=Patient.PatientStatus.WAITING_CLINIC
+        clinic_waiting = Encounter.objects.filter(
+            workflow_state=Encounter.WorkflowState.WAITING_CLINIC
         ).count()
         self.set_waiting_count(clinic_waiting, 'clinic')
 
         # 진료 중
-        clinic_in_progress = Patient.objects.filter(
-            current_status=Patient.PatientStatus.IN_CLINIC
+        clinic_in_progress = Encounter.objects.filter(
+            workflow_state=Encounter.WorkflowState.IN_CLINIC
         ).count()
         self.redis_client.set('clinic:in_progress_count', clinic_in_progress)
 
         # 촬영 대기
-        imaging_waiting = Patient.objects.filter(
-            current_status=Patient.PatientStatus.WAITING_IMAGING
+        imaging_waiting = Encounter.objects.filter(
+            workflow_state=Encounter.WorkflowState.WAITING_IMAGING
         ).count()
         self.set_waiting_count(imaging_waiting, 'imaging')
 
         # 촬영 중
-        imaging_in_progress = Patient.objects.filter(
-            current_status=Patient.PatientStatus.IN_IMAGING
+        imaging_in_progress = Encounter.objects.filter(
+            workflow_state=Encounter.WorkflowState.IN_IMAGING
         ).count()
         self.redis_client.set('imaging:in_progress_count', imaging_in_progress)
 

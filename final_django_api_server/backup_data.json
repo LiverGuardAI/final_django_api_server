@@ -1,0 +1,304 @@
+[
+{
+  "model": "doctor.doctor",
+  "pk": 1,
+  "fields": {
+    "employee_no": "202512230001",
+    "name": "신종혁",
+    "date_of_birth": null,
+    "license_no": "CT01",
+    "phone": "01049586767",
+    "room_number": "402",
+    "created_at": "2025-12-23T05:30:06.807Z",
+    "updated_at": "2025-12-23T05:30:06.807Z",
+    "user": 2,
+    "department": 4
+  }
+},
+{
+  "model": "doctor.doctor",
+  "pk": 2,
+  "fields": {
+    "employee_no": "202512290001",
+    "name": "SYW",
+    "date_of_birth": null,
+    "license_no": "NO.1",
+    "phone": "01040394098",
+    "room_number": "401",
+    "created_at": "2025-12-29T06:51:34.776Z",
+    "updated_at": "2025-12-29T06:51:34.776Z",
+    "user": 11,
+    "department": 4
+  }
+},
+{
+  "model": "doctor.doctor",
+  "pk": 3,
+  "fields": {
+    "employee_no": "3",
+    "name": "김종호",
+    "date_of_birth": null,
+    "license_no": "NO.1",
+    "phone": "01012341234",
+    "room_number": "404",
+    "created_at": "2025-12-29T08:20:37.583Z",
+    "updated_at": "2025-12-29T08:20:37.583Z",
+    "user": 13,
+    "department": 5
+  }
+},
+{
+  "model": "doctor.doctor",
+  "pk": 4,
+  "fields": {
+    "employee_no": "202512290002",
+    "name": "정예진",
+    "date_of_birth": "2000-05-21",
+    "license_no": "CT02",
+    "phone": "01092790879",
+    "room_number": "403",
+    "created_at": "2025-12-29T09:01:48.094Z",
+    "updated_at": "2025-12-29T09:16:08.518Z",
+    "user": 14,
+    "department": 4
+  }
+},
+{
+  "model": "doctor.patient",
+  "pk": "P20240001",
+  "fields": {
+    "sample_id": "S20240001",
+    "name": "김철수",
+    "date_of_birth": "1975-05-20",
+    "age": 50,
+    "gender": "M",
+    "phone": "010-1234-5678",
+    "created_at": "2026-01-05T10:57:09.494Z",
+    "updated_at": "2026-01-05T10:57:09.494Z",
+    "profile": null
+  }
+},
+{
+  "model": "doctor.patient",
+  "pk": "P20240002",
+  "fields": {
+    "sample_id": "S20240002",
+    "name": "이영희",
+    "date_of_birth": "1982-08-15",
+    "age": 43,
+    "gender": "F",
+    "phone": "010-2345-6789",
+    "created_at": "2026-01-05T10:57:09.692Z",
+    "updated_at": "2026-01-05T10:57:09.692Z",
+    "profile": null
+  }
+},
+{
+  "model": "doctor.patient",
+  "pk": "P20240003",
+  "fields": {
+    "sample_id": "S20240003",
+    "name": "박민재",
+    "date_of_birth": "1960-01-30",
+    "age": 65,
+    "gender": "M",
+    "phone": "010-3456-7890",
+    "created_at": "2026-01-05T10:57:09.857Z",
+    "updated_at": "2026-01-07T05:22:29.911Z",
+    "profile": null
+  }
+},
+{
+  "model": "doctor.patient",
+  "pk": "P20240004",
+  "fields": {
+    "sample_id": "S20240004",
+    "name": "최수진",
+    "date_of_birth": "1990-12-05",
+    "age": 35,
+    "gender": "F",
+    "phone": "010-4567-8901",
+    "created_at": "2026-01-05T10:57:10.026Z",
+    "updated_at": "2026-01-05T10:57:10.026Z",
+    "profile": null
+  }
+},
+{
+  "model": "doctor.patient",
+  "pk": "P20240005",
+  "fields": {
+    "sample_id": "S20240005",
+    "name": "정우성",
+    "date_of_birth": "1955-03-22",
+    "age": 70,
+    "gender": "M",
+    "phone": "010-5678-9012",
+    "created_at": "2026-01-05T10:57:10.187Z",
+    "updated_at": "2026-01-07T05:29:41.554Z",
+    "profile": null
+  }
+},
+{
+  "model": "doctor.patient",
+  "pk": "P20240006",
+  "fields": {
+    "sample_id": "S20240006",
+    "name": "강지영",
+    "date_of_birth": "1988-07-07",
+    "age": 37,
+    "gender": "F",
+    "phone": "010-6789-0123",
+    "created_at": "2026-01-05T10:57:10.367Z",
+    "updated_at": "2026-01-07T08:32:18.366Z",
+    "profile": null
+  }
+},
+{
+  "model": "doctor.patient",
+  "pk": "P20240007",
+  "fields": {
+    "sample_id": "S20240007",
+    "name": "조현우",
+    "date_of_birth": "1995-11-11",
+    "age": 30,
+    "gender": "M",
+    "phone": "010-7890-1234",
+    "created_at": "2026-01-05T10:57:10.529Z",
+    "updated_at": "2026-01-07T01:13:07.808Z",
+    "profile": null
+  }
+},
+{
+  "model": "doctor.patient",
+  "pk": "P20240008",
+  "fields": {
+    "sample_id": "S20240008",
+    "name": "윤서연",
+    "date_of_birth": "2000-04-18",
+    "age": 25,
+    "gender": "F",
+    "phone": "010-8901-2345",
+    "created_at": "2026-01-05T10:57:10.693Z",
+    "updated_at": "2026-01-07T00:49:58.976Z",
+    "profile": null
+  }
+},
+{
+  "model": "doctor.patient",
+  "pk": "P20240009",
+  "fields": {
+    "sample_id": "S20240009",
+    "name": "임재석",
+    "date_of_birth": "1968-09-09",
+    "age": 57,
+    "gender": "M",
+    "phone": "010-9012-3456",
+    "created_at": "2026-01-05T10:57:10.854Z",
+    "updated_at": "2026-01-07T06:37:08.827Z",
+    "profile": null
+  }
+},
+{
+  "model": "doctor.patient",
+  "pk": "P20240010",
+  "fields": {
+    "sample_id": "S20240010",
+    "name": "한미모",
+    "date_of_birth": "1979-02-03",
+    "age": 46,
+    "gender": "F",
+    "phone": "010-0123-4567",
+    "created_at": "2026-01-05T10:57:11.016Z",
+    "updated_at": "2026-01-07T03:30:00.697Z",
+    "profile": null
+  }
+},
+{
+  "model": "administration.administration",
+  "pk": 2,
+  "fields": {
+    "employee_no": "202512290003",
+    "name": "정진순",
+    "date_of_birth": "2000-05-21",
+    "phone": "01011111111",
+    "created_at": "2025-12-29T10:44:49.064Z",
+    "updated_at": "2025-12-29T10:44:49.064Z",
+    "user": 15,
+    "department": 6
+  }
+},
+{
+  "model": "administration.administration",
+  "pk": 3,
+  "fields": {
+    "employee_no": "202512300001",
+    "name": "신종",
+    "date_of_birth": "2000-09-11",
+    "phone": "01053335444",
+    "created_at": "2025-12-30T02:19:38.823Z",
+    "updated_at": "2025-12-30T02:20:31.155Z",
+    "user": 16,
+    "department": 6
+  }
+},
+{
+  "model": "accounts.department",
+  "pk": 4,
+  "fields": {
+    "dept_code": "DEPT-001",
+    "dept_name": "소화기내과",
+    "dept_type": "CLINICAL",
+    "phone": "02-1234-5001",
+    "created_at": "2025-12-29T07:11:31.622Z",
+    "updated_at": "2025-12-29T07:11:31.622Z"
+  }
+},
+{
+  "model": "accounts.department",
+  "pk": 5,
+  "fields": {
+    "dept_code": "DEPT-002",
+    "dept_name": "영상의학과",
+    "dept_type": "CLINICAL",
+    "phone": "02-1234-5002",
+    "created_at": "2025-12-29T07:11:31.622Z",
+    "updated_at": "2025-12-29T07:11:31.622Z"
+  }
+},
+{
+  "model": "accounts.department",
+  "pk": 6,
+  "fields": {
+    "dept_code": "DEPT-003",
+    "dept_name": "원무과",
+    "dept_type": "SUPPORT",
+    "phone": "02-1234-5003",
+    "created_at": "2025-12-29T07:11:31.622Z",
+    "updated_at": "2025-12-29T07:11:31.622Z"
+  }
+},
+{
+  "model": "accounts.department",
+  "pk": 7,
+  "fields": {
+    "dept_code": "DEPT-004",
+    "dept_name": "진단검사의학과",
+    "dept_type": "CLINICAL",
+    "phone": "02-1234-5004",
+    "created_at": "2025-12-29T07:11:31.622Z",
+    "updated_at": "2025-12-29T07:11:31.622Z"
+  }
+},
+{
+  "model": "accounts.department",
+  "pk": 8,
+  "fields": {
+    "dept_code": "DEPT-005",
+    "dept_name": "행정팀",
+    "dept_type": "ADMIN",
+    "phone": "02-1234-5005",
+    "created_at": "2025-12-29T07:11:31.622Z",
+    "updated_at": "2025-12-29T07:11:31.622Z"
+  }
+}
+]

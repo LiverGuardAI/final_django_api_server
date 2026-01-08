@@ -1,7 +1,7 @@
 from rest_framework import serializers
 from .models import (
-    Patient, Encounter, Doctor, Appointment, ScheduleDoctor,
-    LabResult, ImagingOrder, HCCDiagnosis, VitalData, AnthropometricData
+    Patient, Encounter, MedicalRecord, Doctor, Appointment, ScheduleDoctor,
+    LabResult, DoctorToRadiologyOrder, HCCDiagnosis, VitalData, AnthropometricData
 )
 from accounts.models import Department
 from datetime import datetime
@@ -10,8 +10,6 @@ from datetime import datetime
 class PatientSerializer(serializers.ModelSerializer):
     """환자 정보 Serializer"""
     gender_display = serializers.CharField(source='get_gender_display', read_only=True)
-    current_status_display = serializers.CharField(source='get_current_status_display', read_only=True)
-    # doctor_name 제거: 담당 의사는 Encounter를 통해 조회
 
     class Meta:
         model = Patient
@@ -19,25 +17,41 @@ class PatientSerializer(serializers.ModelSerializer):
 
 
 class EncounterSerializer(serializers.ModelSerializer):
-    """진료 기록 Serializer (Queue에 사용)"""
+    """방문/진료 세션 Serializer (대기열 관리용)"""
     patient = PatientSerializer(read_only=True)
-    encounter_status_display = serializers.CharField(source='get_encounter_status_display', read_only=True)
-    doctor_name = serializers.CharField(source='doctor.name', read_only=True)
-    staff_name = serializers.CharField(source='staff.name', read_only=True)
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    workflow_state_display = serializers.CharField(source='get_workflow_state_display', read_only=True)
+    patient_name = serializers.CharField(source='patient.name', read_only=True)
 
     class Meta:
         model = Encounter
         fields = '__all__'
 
 
+class MedicalRecordSerializer(serializers.ModelSerializer):
+    """진료 기록 Serializer"""
+    patient = PatientSerializer(read_only=True)
+    record_status_display = serializers.CharField(source='get_record_status_display', read_only=True)
+    doctor_name = serializers.CharField(source='doctor.name', read_only=True)
+    staff_name = serializers.CharField(source='staff.name', read_only=True)
+
+    class Meta:
+        model = MedicalRecord
+        fields = '__all__'
+
+
 class UpdateEncounterStatusSerializer(serializers.Serializer):
     """Encounter 상태 변경용 Serializer"""
-    encounter_status = serializers.ChoiceField(
-        choices=Encounter.EncounterStatus.choices,
-        required=True
+    # Backward compatibility: 'status' field는 실제로 workflow_state를 의미
+    status = serializers.ChoiceField(
+        choices=Encounter.WorkflowState.choices,
+        required=False
     )
-    encounter_start = serializers.TimeField(required=False, allow_null=True)
-    encounter_end = serializers.TimeField(required=False, allow_null=True)
+    workflow_state = serializers.ChoiceField(
+        choices=Encounter.WorkflowState.choices,
+        required=False
+    )
+    current_location = serializers.CharField(required=False, allow_null=True, allow_blank=True)
 
 
 class DepartmentSerializer(serializers.ModelSerializer):
@@ -72,14 +86,14 @@ class LabResultSerializer(serializers.ModelSerializer):
         fields = '__all__'
 
 
-class ImagingOrderSerializer(serializers.ModelSerializer):
-    """영상 검사 오더 Serializer"""
+class DoctorToRadiologyOrderSerializer(serializers.ModelSerializer):
+    """영상 검사 오더 Serializer (의사 -> 영상의학과)"""
     patient_name = serializers.CharField(source='patient.name', read_only=True)
     doctor_name = serializers.CharField(source='doctor.name', read_only=True)
     status_display = serializers.CharField(source='get_status_display', read_only=True)
 
     class Meta:
-        model = ImagingOrder
+        model = DoctorToRadiologyOrder
         fields = '__all__'
 
 
@@ -106,15 +120,20 @@ class AnthropometricDataSerializer(serializers.ModelSerializer):
         fields = '__all__'
 
 
-class EncounterDetailSerializer(serializers.ModelSerializer):
+class MedicalRecordDetailSerializer(serializers.ModelSerializer):
     """진료 기록 상세 Serializer (환자 정보, 바이탈, 검사 결과 포함)"""
     patient = PatientSerializer(read_only=True)
     doctor_name = serializers.CharField(source='doctor.name', read_only=True)
     staff_name = serializers.CharField(source='staff.name', read_only=True)
-    encounter_status_display = serializers.CharField(source='get_encounter_status_display', read_only=True)
+    record_status_display = serializers.CharField(source='get_record_status_display', read_only=True)
     questionnaire_status_display = serializers.CharField(source='get_questionnaire_status_display', read_only=True)
     diagnosis_name = serializers.CharField(source='diagnosis_type.name', read_only=True, allow_null=True)
 
     class Meta:
-        model = Encounter
+        model = MedicalRecord
         fields = '__all__'
+
+
+# Backward compatibility alias
+EncounterDetailSerializer = MedicalRecordDetailSerializer
+ImagingOrderSerializer = DoctorToRadiologyOrderSerializer

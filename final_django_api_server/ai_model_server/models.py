@@ -45,28 +45,7 @@ class ClinicalFeatureVector(models.Model):
         db_table = 'hospital"."clinical_feature_vectors'
         verbose_name = '임상 특징 벡터'
         verbose_name_plural = '임상 특징 벡터'
-
-
-class GenomicFeatureVector(models.Model):
-    """유전체 특징 벡터"""
-    
-    genomic_vector_id = models.AutoField(primary_key=True)
-    ssgsea_version = models.CharField(max_length=20, blank=True, null=True)
-    pathway_count = models.IntegerField(blank=True, null=True)
-    extraction_model = models.CharField(max_length=20, blank=True, null=True)
-    model_version = models.CharField(max_length=20, blank=True, null=True)
-    vector_dim = models.IntegerField(default=512)
-    feature_vector = VectorField(dimensions=512, blank=True, null=True)
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-
-    genomic = models.ForeignKey('doctor.GenomicData', on_delete=models.CASCADE, db_column='genomic_id')
-    
-    class Meta:
-        db_table = 'hospital"."genomic_feature_vectors'
-        verbose_name = '유전체 특징 벡터'
-        verbose_name_plural = '유전체 특징 벡터'
-
+        
 
 class AIAnalysisResult(models.Model):
     """통합 AI 분석 결과"""
@@ -106,7 +85,7 @@ class AIAnalysisResult(models.Model):
     encounter = models.ForeignKey('doctor.Encounter', on_delete=models.CASCADE, db_column='encounter_id')
     imaging_vector = models.ForeignKey(RadioFeatureVector, on_delete=models.SET_NULL, null=True, blank=True, db_column='imaging_vector_id')
     clinical_vector = models.ForeignKey(ClinicalFeatureVector, on_delete=models.SET_NULL, null=True, blank=True, db_column='clinical_vector_id')
-    genomic_vector = models.ForeignKey(GenomicFeatureVector, on_delete=models.SET_NULL, null=True, blank=True, db_column='genomic_vector_id')
+    genomic = models.ForeignKey('doctor.GenomicData', on_delete=models.SET_NULL, null=True, blank=True, db_column='genomic_id')
     
     class Meta:
         db_table = 'hospital"."ai_analysis_results'

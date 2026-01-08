@@ -6,7 +6,6 @@ from django.db.models import Q
 from accounts.permissions import IsRadiologist, IsDoctorOrRadiologist
 from doctor.models import Patient
 from .serializers import PatientWaitlistSerializer, RadiologyQueueSerializer
-from .models import RadiologyPatientQueue
 
 
 class RadiologyDashboardView(APIView):

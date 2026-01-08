@@ -2,7 +2,7 @@ from django.urls import path
 from .views import (
     DoctorDashboardView, PatientListView, QueueListView, UpdateEncounterStatusView,
     DoctorListView, EncounterDetailView, PatientEncounterHistoryView,
-    PatientLabResultsView, PatientImagingOrdersView, PatientHCCDiagnosisView,
+    PatientLabResultsView, PatientDoctorToRadiologyOrdersView, PatientHCCDiagnosisView,
     DoctorInfoView
 )
 
@@ -15,7 +15,7 @@ urlpatterns = [
     path('encounter/<int:encounter_id>/', EncounterDetailView.as_view(), name='encounter_detail'),
     path('patient/<str:patient_id>/encounters/', PatientEncounterHistoryView.as_view(), name='patient_encounter_history'),
     path('patient/<str:patient_id>/lab-results/', PatientLabResultsView.as_view(), name='patient_lab_results'),
-    path('patient/<str:patient_id>/imaging-orders/', PatientImagingOrdersView.as_view(), name='patient_imaging_orders'),
+    path('patient/<str:patient_id>/doctor-to-radiology-orders/', PatientDoctorToRadiologyOrdersView.as_view(), name='patient_imaging_orders'),
     path('patient/<str:patient_id>/hcc-diagnosis/', PatientHCCDiagnosisView.as_view(), name='patient_hcc_diagnosis'),
     path('list/', DoctorListView.as_view(), name='doctor_list'),
 ]

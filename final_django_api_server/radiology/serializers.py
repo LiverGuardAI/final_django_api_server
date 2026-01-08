@@ -1,7 +1,7 @@
 # radiology/serializers.py
 from rest_framework import serializers
-from doctor.models import Patient
-from .models import RadiologyPatientQueue, DICOMStudy
+from doctor.models import Patient, DoctorToRadiologyOrder
+from .models import DICOMStudy
 
 
 class PatientWaitlistSerializer(serializers.ModelSerializer):
@@ -23,20 +23,18 @@ class PatientWaitlistSerializer(serializers.ModelSerializer):
 
 
 class RadiologyQueueSerializer(serializers.ModelSerializer):
-    """촬영 대기열 정보 시리얼라이저"""
+    """촬영 대기열 정보 시리얼라이저 (DoctorToRadiologyOrder 기반)"""
     patient = PatientWaitlistSerializer(read_only=True)
 
     class Meta:
-        model = RadiologyPatientQueue
+        model = DoctorToRadiologyOrder
         fields = [
-            'rqueue_id',
+            'order_id',
             'patient',
             'modality',
             'body_part',
             'scheduled_at',
-            'acquired_at',
             'status',
-            'created_at',
-            'completed_at',
-            'sample_id',
+            'ordered_at',
+            'study_uid',
         ]

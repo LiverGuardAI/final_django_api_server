@@ -3,10 +3,10 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from accounts.permissions import IsDoctor
-from .models import Encounter, Patient, Doctor, LabResult, ImagingOrder, HCCDiagnosis
+from .models import Encounter, MedicalRecord, Patient, Doctor, LabResult, DoctorToRadiologyOrder, HCCDiagnosis
 from .serializers import (
-    EncounterSerializer, UpdateEncounterStatusSerializer, DoctorListSerializer,
-    EncounterDetailSerializer, LabResultSerializer, ImagingOrderSerializer,
+    EncounterSerializer, MedicalRecordSerializer, UpdateEncounterStatusSerializer, DoctorListSerializer,
+    MedicalRecordDetailSerializer, LabResultSerializer, DoctorToRadiologyOrderSerializer,
     HCCDiagnosisSerializer
 )
 from datetime import date, datetime
@@ -55,19 +55,15 @@ class QueueListView(APIView):
 
     def get(self, request):
         try:
-            # 현재 로그인한 의사 정보 가져오기
-            doctor = Doctor.objects.get(user=request.user)
-
             # 오늘 날짜
             today = date.today()
 
-            # 쿼리 파라미터로 상태 필터링 (기본값: WAITING)
-            encounter_status = request.query_params.get('status', 'WAITING')
+            # 쿼리 파라미터로 상태 필터링 (기본값: WAITING_CLINIC)
+            encounter_status = request.query_params.get('status', 'WAITING_CLINIC')
 
-            # 해당 의사의 오늘 Encounter 조회
+            # Encounter 조회
             encounters = Encounter.objects.filter(
-                doctor=doctor,
-                encounter_date=today
+                created_at__date=today
             )
 
             # 상태별 필터링
@@ -75,31 +71,28 @@ class QueueListView(APIView):
                 # 모든 상태
                 pass
             else:
-                encounters = encounters.filter(encounter_status=encounter_status)
+                encounters = encounters.filter(workflow_state=encounter_status)
 
-            # 시간순 정렬
-            encounters = encounters.order_by('encounter_time')
+            # state_entered_at 순 정렬 (FIFO)
+            encounters = encounters.order_by('state_entered_at')
 
             # Serialize
             serializer = EncounterSerializer(encounters, many=True)
 
             # 통계 정보
             waiting_count = Encounter.objects.filter(
-                doctor=doctor,
-                encounter_date=today,
-                encounter_status=Encounter.EncounterStatus.WAITING
+                created_at__date=today,
+                workflow_state=Encounter.WorkflowState.WAITING_CLINIC
             ).count()
 
             in_progress_count = Encounter.objects.filter(
-                doctor=doctor,
-                encounter_date=today,
-                encounter_status=Encounter.EncounterStatus.IN_PROGRESS
+                created_at__date=today,
+                workflow_state=Encounter.WorkflowState.IN_CLINIC
             ).count()
 
             completed_count = Encounter.objects.filter(
-                doctor=doctor,
-                encounter_date=today,
-                encounter_status=Encounter.EncounterStatus.COMPLETED
+                created_at__date=today,
+                workflow_state=Encounter.WorkflowState.COMPLETED
             ).count()
 
             return Response({
@@ -112,10 +105,6 @@ class QueueListView(APIView):
                 }
             }, status=status.HTTP_200_OK)
 
-        except Doctor.DoesNotExist:
-            return Response({
-                'error': '의사 정보를 찾을 수 없습니다.'
-            }, status=status.HTTP_404_NOT_FOUND)
         except Exception as e:
             return Response({
                 'error': str(e)
@@ -128,36 +117,38 @@ class UpdateEncounterStatusView(APIView):
 
     def patch(self, request, encounter_id):
         try:
-            # 현재 로그인한 의사 정보
-            doctor = Doctor.objects.get(user=request.user)
-
-            # 해당 Encounter 조회 (자신의 환자만)
-            encounter = Encounter.objects.get(
-                encounter_id=encounter_id,
-                doctor=doctor
-            )
+            # 해당 Encounter 조회
+            encounter = Encounter.objects.get(encounter_id=encounter_id)
 
             # 요청 데이터 검증
             serializer = UpdateEncounterStatusSerializer(data=request.data)
             if serializer.is_valid():
-                new_status = serializer.validated_data['encounter_status']
+                # 워크플로우 상태 변경 (backward compatibility: 'status' 필드도 허용)
+                new_workflow_state = serializer.validated_data.get('workflow_state') or serializer.validated_data.get('status')
 
-                # 상태 변경
-                encounter.encounter_status = new_status
+                if new_workflow_state:
+                    # 워크플로우 상태 설정
+                    encounter.workflow_state = new_workflow_state
+                    encounter.state_entered_at = timezone.now()
 
-                # 진료 시작 시간 자동 설정
-                if new_status == Encounter.EncounterStatus.IN_PROGRESS and not encounter.encounter_start:
-                    encounter.encounter_start = timezone.now().time()
+                    # FHIR 레벨 status 자동 설정
+                    if new_workflow_state in [Encounter.WorkflowState.REQUESTED, Encounter.WorkflowState.REGISTERED]:
+                        encounter.status = Encounter.Status.PLANNED
+                    elif new_workflow_state in [Encounter.WorkflowState.WAITING_CLINIC, Encounter.WorkflowState.IN_CLINIC,
+                                                Encounter.WorkflowState.WAITING_IMAGING, Encounter.WorkflowState.IN_IMAGING]:
+                        encounter.status = Encounter.Status.IN_PROGRESS
+                    elif new_workflow_state == Encounter.WorkflowState.COMPLETED:
+                        encounter.status = Encounter.Status.COMPLETED
+                    elif new_workflow_state == Encounter.WorkflowState.CANCELLED:
+                        encounter.status = Encounter.Status.CANCELLED
 
-                # 진료 완료 시간 자동 설정
-                if new_status == Encounter.EncounterStatus.COMPLETED and not encounter.encounter_end:
-                    encounter.encounter_end = timezone.now().time()
+                    # 완료 시간 자동 설정
+                    if new_workflow_state == Encounter.WorkflowState.COMPLETED and not encounter.end_time:
+                        encounter.end_time = timezone.now()
 
-                # encounter_start/end가 요청에 포함되어 있으면 사용
-                if 'encounter_start' in serializer.validated_data:
-                    encounter.encounter_start = serializer.validated_data['encounter_start']
-                if 'encounter_end' in serializer.validated_data:
-                    encounter.encounter_end = serializer.validated_data['encounter_end']
+                # 위치 변경
+                if 'current_location' in serializer.validated_data:
+                    encounter.current_location = serializer.validated_data['current_location']
 
                 encounter.save()
 
@@ -170,13 +161,9 @@ class UpdateEncounterStatusView(APIView):
             else:
                 return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-        except Doctor.DoesNotExist:
-            return Response({
-                'error': '의사 정보를 찾을 수 없습니다.'
-            }, status=status.HTTP_404_NOT_FOUND)
         except Encounter.DoesNotExist:
             return Response({
-                'error': '해당 진료 기록을 찾을 수 없습니다.'
+                'error': '해당 방문 기록을 찾을 수 없습니다.'
             }, status=status.HTTP_404_NOT_FOUND)
         except Exception as e:
             return Response({
@@ -216,44 +203,43 @@ class DoctorListView(APIView):
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
-class EncounterDetailView(APIView):
-    """Encounter 상세 정보 조회 API"""
+class MedicalRecordDetailView(APIView):
+    """MedicalRecord 상세 정보 조회 API"""
     permission_classes = [IsDoctor]
 
-    def get(self, request, encounter_id):
+    def get(self, request, record_id):
         try:
             # 1. 현재 로그인한 의사 정보 가져오기
             current_doctor = Doctor.objects.get(user=request.user)
-            
-            # 2. Encounter 조회
-            # doctor=current_doctor 조건을 걸면 객체 비교가 되어 가끔 실패할 수 있음.
-            # 대신, 안전하게 "내가 담당했거나(OR) 담당 의사가 없는 경우"까지 허용하거나
-            # 일단 조건을 풀고 데이터를 가져온 뒤 검증하는 방식이 안전함.
-            
-            encounter = Encounter.objects.select_related(
-                'patient', 'doctor', 'staff', 'diagnosis_type'
-            ).get(encounter_id=encounter_id)
 
-            # 3. 권한 검사 (여기서 403을 명확하게 뱉어줌)
-            # 담당 의사가 지정되어 있는데, 그게 내가 아니라면? -> 403
-            if encounter.doctor and encounter.doctor.doctor_id != current_doctor.doctor_id:
+            # 2. MedicalRecord 조회
+            medical_record = MedicalRecord.objects.select_related(
+                'patient', 'doctor', 'staff', 'diagnosis_type', 'encounter'
+            ).get(record_id=record_id)
+
+            # 3. 권한 검사
+            if medical_record.doctor and medical_record.doctor.doctor_id != current_doctor.doctor_id:
                 return Response({
-                    'error': '본인의 환자가 아닙니다.'
+                    'error': '본인의 진료 기록이 아닙니다.'
                 }, status=status.HTTP_403_FORBIDDEN)
 
             # 4. 데이터 반환
-            serializer = EncounterDetailSerializer(encounter)
+            serializer = MedicalRecordDetailSerializer(medical_record)
             return Response(serializer.data, status=status.HTTP_200_OK)
 
         except Doctor.DoesNotExist:
             return Response({'error': '의사 정보를 찾을 수 없습니다.'}, status=404)
-        except Encounter.DoesNotExist:
+        except MedicalRecord.DoesNotExist:
             return Response({'error': '해당 진료 기록을 찾을 수 없습니다.'}, status=404)
         except Exception as e:
             return Response({'error': str(e)}, status=500)
 
 
-class PatientEncounterHistoryView(APIView):
+# Backward compatibility alias
+EncounterDetailView = MedicalRecordDetailView
+
+
+class PatientMedicalRecordHistoryView(APIView):
     """특정 환자의 과거 진료 기록 목록 조회 API"""
     permission_classes = [IsDoctor]
 
@@ -262,18 +248,18 @@ class PatientEncounterHistoryView(APIView):
         특정 환자의 과거 진료 기록 목록 조회
         """
         try:
-            encounters = Encounter.objects.filter(
+            medical_records = MedicalRecord.objects.filter(
                 patient_id=patient_id
-            ).select_related('doctor', 'staff', 'diagnosis_type').order_by('-encounter_date', '-encounter_time')
+            ).select_related('doctor', 'staff', 'diagnosis_type', 'encounter').order_by('-record_date', '-record_time')
 
             # 최근 N개만 조회 (선택적)
             limit = request.query_params.get('limit', None)
             if limit:
-                encounters = encounters[:int(limit)]
+                medical_records = medical_records[:int(limit)]
 
-            serializer = EncounterDetailSerializer(encounters, many=True)
+            serializer = MedicalRecordDetailSerializer(medical_records, many=True)
             return Response({
-                'count': encounters.count(),
+                'count': medical_records.count(),
                 'results': serializer.data
             }, status=status.HTTP_200_OK)
 
@@ -281,6 +267,10 @@ class PatientEncounterHistoryView(APIView):
             return Response({
                 'error': str(e)
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+# Backward compatibility alias
+PatientEncounterHistoryView = PatientMedicalRecordHistoryView
 
 
 class PatientLabResultsView(APIView):
@@ -313,8 +303,8 @@ class PatientLabResultsView(APIView):
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
-class PatientImagingOrdersView(APIView):
-    """특정 환자의 영상 검사 오더 목록 조회 API"""
+class PatientDoctorToRadiologyOrdersView(APIView):
+    """특정 환자의 영상 검사 오더 목록 조회 API (의사 -> 영상의학과)"""
     permission_classes = [IsDoctor]
 
     def get(self, request, patient_id):
@@ -322,7 +312,7 @@ class PatientImagingOrdersView(APIView):
         특정 환자의 영상 검사 오더 목록 조회
         """
         try:
-            imaging_orders = ImagingOrder.objects.filter(
+            imaging_orders = DoctorToRadiologyOrder.objects.filter(
                 patient_id=patient_id
             ).select_related('doctor').order_by('-ordered_at')
 
@@ -331,7 +321,7 @@ class PatientImagingOrdersView(APIView):
             if limit:
                 imaging_orders = imaging_orders[:int(limit)]
 
-            serializer = ImagingOrderSerializer(imaging_orders, many=True)
+            serializer = DoctorToRadiologyOrderSerializer(imaging_orders, many=True)
             return Response({
                 'count': imaging_orders.count(),
                 'results': serializer.data

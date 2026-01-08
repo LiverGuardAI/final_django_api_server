@@ -39,7 +39,8 @@ class DICOMStudy(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     patient = models.ForeignKey('doctor.Patient', on_delete=models.CASCADE, to_field='patient_id', db_column='patient_id')
-    
+    encounter = models.ForeignKey('doctor.Encounter', on_delete=models.SET_NULL, null=True, blank=True, db_column='encounter_id')
+
     class Meta:
         db_table = 'hospital"."dicom_studies'
 
@@ -66,35 +67,26 @@ class DICOMSeries(models.Model):
         db_table = 'hospital"."dicom_series'
 
 
-class RadiologyPatientQueue(models.Model):
-    """촬영 이력"""
-
-    rqueue_id = models.AutoField(primary_key=True)
-    modality = models.CharField(max_length=16, blank=True, null=True)
-    body_part = models.CharField(max_length=64, blank=True, null=True)
-    scheduled_at = models.DateTimeField(blank=True, null=True)
-    acquired_at = models.DateTimeField(blank=True, null=True)
-    status = models.CharField(max_length=30, blank=True, null=True)
-    created_at = models.DateTimeField(auto_now_add=True)
-    completed_at = models.DateTimeField(blank=True, null=True)
-    sample_id = models.CharField(max_length=100, blank=True, null=True)
-
-    radiologic = models.ForeignKey(Radiology, on_delete=models.RESTRICT, db_column='radiologic_id')
-    patient = models.ForeignKey('doctor.Patient', on_delete=models.CASCADE, to_field='patient_id', db_column='patient_id')
-    study = models.ForeignKey(DICOMStudy, on_delete=models.SET_NULL, null=True, blank=True, to_field='study_uid', db_column='study_uid')
-    
-    class Meta:
-        db_table = 'hospital"."radiology_patient_queue'
 
 
 class RadiologyAIRun(models.Model):
     """AI 실행 기록"""
 
+    class RunStatus(models.TextChoices):
+        PENDING = 'PENDING', '대기중'
+        RUNNING = 'RUNNING', '분석중'
+        COMPLETED = 'COMPLETED', '완료'
+        FAILED = 'FAILED', '실패'
+
     run_id = models.AutoField(primary_key=True)
     task_type = models.CharField(max_length=30, blank=True, null=True)
     model_name = models.CharField(max_length=128, blank=True, null=True)
-    request_payload = models.JSONField(blank=True, null=True)
-    status = models.CharField(max_length=20, blank=True, null=True)
+    # request_payload 제거됨
+    status = models.CharField(
+        max_length=20, 
+        choices=RunStatus.choices, 
+        default=RunStatus.PENDING
+    )
     started_at = models.DateTimeField(blank=True, null=True)
     finished_at = models.DateTimeField(blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -107,3 +99,32 @@ class RadiologyAIRun(models.Model):
             models.Index(fields=['series']),
             models.Index(fields=['status']),
         ]
+
+
+class RadiologyToDoctorOrder(models.Model):
+    """영상의학과 -> 의사 오더 (추가 촬영 제안 등)"""
+
+    class OrderStatus(models.TextChoices):
+        REQUESTED = 'REQUESTED', '요청됨'
+        CHECKED = 'CHECKED', '확인됨'
+        CANCELLED = 'CANCELLED', '취소'
+
+    rd_order_id = models.AutoField(primary_key=True)
+    message = models.TextField(blank=True, null=True)
+    priority = models.CharField(max_length=10, default='ROUTINE')
+    status = models.CharField(
+        max_length=20, 
+        choices=OrderStatus.choices, 
+        default=OrderStatus.REQUESTED
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    # Relations
+    radiologist = models.ForeignKey(Radiology, on_delete=models.RESTRICT, db_column='radiologic_id')
+    doctor = models.ForeignKey('doctor.Doctor', on_delete=models.CASCADE, db_column='doctor_id')
+    patient = models.ForeignKey('doctor.Patient', on_delete=models.CASCADE, db_column='patient_id')
+    encounter = models.ForeignKey('doctor.Encounter', on_delete=models.CASCADE, db_column='encounter_id', null=True, blank=True)
+    
+    class Meta:
+        db_table = 'hospital"."radiology_to_doctor_orders'
