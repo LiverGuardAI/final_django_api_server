@@ -6,9 +6,10 @@ from .tasks import process_segmentation, process_feature_extraction
 
 from datetime import datetime
 from rest_framework import generics
-from .models import RadioFeatureVector, ClinicalFeatureVector, GenomicFeatureVector, AIAnalysisResult
+from .models import RadioFeatureVector, ClinicalFeatureVector, AIAnalysisResult
 from .serializers import RadioFeatureSerializer, ClinicalFeatureSerializer, GenomicFeatureSerializer, AIAnalysisResultSerializer
 from .feature_mapping import create_clinical_feature_vector_from_dict, validate_clinical_vector, MODEL_CLINICAL_FEATURES
+from doctor.models import GenomicData
 
 import requests
 from django.conf import settings
@@ -537,9 +538,7 @@ class PatientGenomicFeatureListView(generics.ListAPIView):
     
     def get_queryset(self):
         patient_id = self.kwargs['patient_id']
-        return GenomicFeatureVector.objects.filter(
-            genomic__patient_id=patient_id
-        ).select_related('genomic').order_by('-created_at')
+        return GenomicData.objects.filter(patient_id=patient_id).order_by('-created_at')
 
 
 # ============================================================
@@ -595,7 +594,7 @@ class PredictByIdsView(APIView):
     def post(self, request):
         radio_id = request.data.get('radio_vector_id')
         clinical_id = request.data.get('clinical_vector_id')
-        genomic_id = request.data.get('genomic_vector_id')
+        genomic_id = request.data.get('genomic_id')
         
         if not radio_id or not clinical_id:
             return Response(
@@ -624,24 +623,23 @@ class PredictByIdsView(APIView):
             genomic_date = None
             
             if genomic_id:
-                try:
-                    genomic = GenomicFeatureVector.objects.select_related('genomic').get(genomic_vector_id=genomic_id)
-                    mrna_vector = genomic.feature_vector
-                    use_mrna = True
-                    genomic_date = genomic.genomic.sample_date if genomic.genomic else None
-                except GenomicFeatureVector.DoesNotExist:
-                    pass
+                genomic_obj = GenomicData.objects.get(genomic_id=genomic_id)
+                mrna_vector = genomic_obj.pathway_scores 
+                use_mrna = True
+        except GenomicData.DoesNotExist:
+            pass
             
             # BentoML 요청
             bentoml_payload = {
                 "clinical": clinical.feature_vector,
                 "ct_features": radio.feature_vector,
+                "mrna": mrna_vector,
                 "use_mrna": use_mrna
             }
             if use_mrna and mrna_vector:
                 bentoml_payload["mrna"] = mrna_vector
             
-            response = requests.post(f"{BENTOML_URL}/predict", json=bentoml_payload, timeout=30)
+            response = requests.post(f"http://localhost:3001/predict", json=bentoml_payload, timeout=30)
             response.raise_for_status()
             result = response.json()
             
@@ -651,7 +649,7 @@ class PredictByIdsView(APIView):
                 'radio_study_date': str(radio_date) if radio_date else None,
                 'clinical_vector_id': str(clinical_id),
                 'clinical_date': str(clinical_date) if clinical_date else None,
-                'genomic_vector_id': str(genomic_id) if genomic_id else None,
+                'genomic_id': str(genomic_id) if genomic_id else None,
                 'genomic_sample_date': str(genomic_date) if genomic_date else None,
                 'use_mrna': use_mrna
             }
@@ -717,10 +715,10 @@ class PredictFromPatientView(APIView):
             use_mrna = False
             if genomic_id:
                 try:
-                    genomic = GenomicFeatureVector.objects.get(genomic_vector_id=genomic_id)
-                    mrna_vector = genomic.feature_vector
+                    genomic = GenomicData.objects.get(genomic_id=genomic_id)
+                    mrna_vector = genomic.pathway_scores
                     use_mrna = True
-                except GenomicFeatureVector.DoesNotExist:
+                except GenomicData.DoesNotExist:
                     pass
             
             # BentoML 요청
@@ -732,7 +730,7 @@ class PredictFromPatientView(APIView):
             if use_mrna and mrna_vector:
                 bentoml_payload["mrna"] = mrna_vector
             
-            response = requests.post(f"{BENTOML_URL}/predict", json=bentoml_payload, timeout=30)
+            response = requests.post("http://localhost:3001/predict", json=bentoml_payload, timeout=30)
             response.raise_for_status()
             result = response.json()
             
@@ -769,7 +767,7 @@ class SaveAnalysisResultView(APIView):
                 patient_id=request.data['patient_id'],
                 imaging_vector_id=request.data.get('radio_vector_id'),
                 clinical_vector_id=request.data.get('clinical_vector_id'),
-                genomic_vector_id=request.data.get('genomic_vector_id'),
+                genomic_id=request.data.get('genomic_vector_id'),
                 prediction_results={
                     'stage': request.data.get('stage_prediction', {}),
                     'relapse': request.data.get('relapse_prediction', {}),

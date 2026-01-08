@@ -7,9 +7,9 @@ from rest_framework import serializers
 from .models import (
     RadioFeatureVector,
     ClinicalFeatureVector,
-    GenomicFeatureVector,
     AIAnalysisResult
 )
+from doctor.models import GenomicData
 
 
 class RadioFeatureSerializer(serializers.ModelSerializer):
@@ -67,14 +67,13 @@ class GenomicFeatureSerializer(serializers.ModelSerializer):
     """유전체 특징 벡터 Serializer"""
     
     class Meta:
-        model = GenomicFeatureVector
+        model = GenomicData
         fields = [
-            'genomic_vector_id',
-            'feature_vector',
+            'genomic_id',
+            'pathway_scores',
             'sample_date',
-            'sample_type',
-            'analysis_method',
-            'created_at'
+            'sample_id',
+            'created_at',
         ]
 
 
@@ -90,7 +89,7 @@ class AIAnalysisResultSerializer(serializers.ModelSerializer):
             'patient_id',
             'radio_vector_id',
             'clinical_vector_id',
-            'genomic_vector_id',
+            '',
             'stage_prediction',
             'relapse_prediction',
             'survival_prediction',
@@ -141,7 +140,7 @@ class PredictionByIdsRequestSerializer(serializers.Serializer):
     
     radio_vector_id = serializers.UUIDField()
     clinical_vector_id = serializers.UUIDField()
-    genomic_vector_id = serializers.UUIDField(required=False, allow_null=True)
+    genomic_id = serializers.UUIDField(required=False, allow_null=True)
 
 
 class SaveAnalysisRequestSerializer(serializers.Serializer):
@@ -150,7 +149,7 @@ class SaveAnalysisRequestSerializer(serializers.Serializer):
     patient_id = serializers.UUIDField()
     radio_vector_id = serializers.UUIDField(required=False, allow_null=True)
     clinical_vector_id = serializers.UUIDField(required=False, allow_null=True)
-    genomic_vector_id = serializers.UUIDField(required=False, allow_null=True)
+    genomic_id = serializers.UUIDField(required=False, allow_null=True)
     stage_prediction = serializers.JSONField(required=False, default=dict)
     relapse_prediction = serializers.JSONField(required=False, default=dict)
     survival_prediction = serializers.JSONField(required=False, default=dict)
