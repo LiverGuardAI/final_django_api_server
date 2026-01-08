@@ -3,9 +3,10 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import AllowAny
 from django.db.models import Q
+from django.utils import timezone
 from accounts.permissions import IsRadiologist, IsDoctorOrRadiologist
-from doctor.models import Patient
-from .serializers import PatientWaitlistSerializer, RadiologyQueueSerializer
+from doctor.models import Patient, Encounter
+from .serializers import PatientWaitlistSerializer, RadiologyQueueSerializer, EncounterWaitlistSerializer
 
 
 class RadiologyDashboardView(APIView):
@@ -50,19 +51,21 @@ class WaitlistView(APIView):
 
     def get(self, request):
         """
-        current_status가 '촬영대기중' 또는 '촬영중'인 환자 목록 조회
+        Encounter.workflow_state가 'WAITING_IMAGING' 또는 'IN_IMAGING'인 환자 목록 조회
         """
-        # Patient 모델에서 촬영대기중 또는 촬영중인 환자 필터링
-        patients = Patient.objects.filter(
-            Q(current_status='촬영대기중') | Q(current_status='촬영중')
-        ).order_by('-created_at')
+        encounters = Encounter.objects.filter(
+            workflow_state__in=[
+                Encounter.WorkflowState.WAITING_IMAGING,
+                Encounter.WorkflowState.IN_IMAGING,
+            ]
+        ).select_related('patient').order_by('-state_entered_at')
 
         # 직렬화
-        serializer = PatientWaitlistSerializer(patients, many=True)
+        serializer = EncounterWaitlistSerializer(encounters, many=True)
 
         return Response({
             'message': '촬영 대기 환자 목록',
-            'count': patients.count(),
+            'count': encounters.count(),
             'patients': serializer.data
         }, status=status.HTTP_200_OK)
 
@@ -73,7 +76,7 @@ class StartFilmingView(APIView):
 
     def post(self, request):
         """
-        환자의 current_status를 '촬영중'으로 업데이트
+        Encounter.workflow_state를 'IN_IMAGING'으로 업데이트
 
         Request Body:
         {
@@ -88,25 +91,33 @@ class StartFilmingView(APIView):
             }, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            # 환자 조회
-            patient = Patient.objects.get(patient_id=patient_id)
+            encounter = Encounter.objects.filter(
+                patient__patient_id=patient_id,
+                workflow_state__in=[
+                    Encounter.WorkflowState.WAITING_IMAGING,
+                    Encounter.WorkflowState.IN_IMAGING,
+                ],
+            ).order_by('-state_entered_at').first()
+
+            if not encounter:
+                return Response({
+                    'error': f'Encounter for patient {patient_id} not found'
+                }, status=status.HTTP_404_NOT_FOUND)
 
             # 상태 업데이트
-            patient.current_status = '촬영중'
-            patient.save()
+            encounter.workflow_state = Encounter.WorkflowState.IN_IMAGING
+            encounter.status = Encounter.Status.IN_PROGRESS
+            encounter.state_entered_at = timezone.now()
+            encounter.save()
 
             # 업데이트된 환자 정보 직렬화
-            serializer = PatientWaitlistSerializer(patient)
+            serializer = EncounterWaitlistSerializer(encounter)
 
             return Response({
                 'message': '촬영이 시작되었습니다',
                 'patient': serializer.data
             }, status=status.HTTP_200_OK)
 
-        except Patient.DoesNotExist:
-            return Response({
-                'error': f'Patient with ID {patient_id} not found'
-            }, status=status.HTTP_404_NOT_FOUND)
         except Exception as e:
             return Response({
                 'error': str(e)
@@ -119,7 +130,7 @@ class EndFilmingView(APIView):
 
     def post(self, request):
         """
-        환자의 current_status를 '촬영완료'로 업데이트
+        Encounter.workflow_state를 'COMPLETED'로 업데이트
 
         Request Body:
         {
@@ -134,25 +145,34 @@ class EndFilmingView(APIView):
             }, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            # 환자 조회
-            patient = Patient.objects.get(patient_id=patient_id)
+            encounter = Encounter.objects.filter(
+                patient__patient_id=patient_id,
+                workflow_state__in=[
+                    Encounter.WorkflowState.WAITING_IMAGING,
+                    Encounter.WorkflowState.IN_IMAGING,
+                ],
+            ).order_by('-state_entered_at').first()
+
+            if not encounter:
+                return Response({
+                    'error': f'Encounter for patient {patient_id} not found'
+                }, status=status.HTTP_404_NOT_FOUND)
 
             # 상태 업데이트
-            patient.current_status = '촬영완료'
-            patient.save()
+            encounter.workflow_state = Encounter.WorkflowState.COMPLETED
+            encounter.status = Encounter.Status.COMPLETED
+            encounter.end_time = timezone.now()
+            encounter.state_entered_at = timezone.now()
+            encounter.save()
 
             # 업데이트된 환자 정보 직렬화
-            serializer = PatientWaitlistSerializer(patient)
+            serializer = EncounterWaitlistSerializer(encounter)
 
             return Response({
                 'message': '촬영이 종료되었습니다',
                 'patient': serializer.data
             }, status=status.HTTP_200_OK)
 
-        except Patient.DoesNotExist:
-            return Response({
-                'error': f'Patient with ID {patient_id} not found'
-            }, status=status.HTTP_404_NOT_FOUND)
         except Exception as e:
             return Response({
                 'error': str(e)
