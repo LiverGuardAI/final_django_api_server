@@ -46,5 +46,5 @@ class SignupSerializer(serializers.ModelSerializer):
 
 class LoginSerializer(serializers.Serializer):
     """로그인용 Serializer"""
-    user_id = serializers.IntegerField(required=True)
+    user_id = serializers.CharField(required=True)
     password = serializers.CharField(required=True, write_only=True)

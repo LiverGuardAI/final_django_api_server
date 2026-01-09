@@ -22,7 +22,7 @@ def signup_view(request):
         "phone_number": "01012345678",
         "gender": "M",
         "birth_date": "1950-01-01",
-        "user_id": 12345,
+        "user_id": "hong123",
         "password": "secure_password",
         "password_confirm": "secure_password"
     }
@@ -60,7 +60,7 @@ def login_view(request):
 
     POST /api/patients/login/
     {
-        "user_id": 12345,
+        "user_id": "hong123",
         "password": "secure_password"
     }
     """
