@@ -402,6 +402,8 @@ class EncounterDetailView(APIView):
             if encounter_status:
                 if encounter_status == 'IN_PROGRESS':
                     new_workflow_state = Encounter.WorkflowState.IN_CLINIC
+                elif encounter_status == 'IN_CLINIC':
+                    new_workflow_state = Encounter.WorkflowState.IN_CLINIC
                 elif encounter_status == 'WAITING':
                     new_workflow_state = Encounter.WorkflowState.WAITING_CLINIC
                 elif encounter_status == 'COMPLETED':

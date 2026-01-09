@@ -7,10 +7,11 @@ from .models import Encounter, MedicalRecord, Patient, Doctor, LabResult, Doctor
 from .serializers import (
     EncounterSerializer, MedicalRecordSerializer, UpdateEncounterStatusSerializer, DoctorListSerializer,
     MedicalRecordDetailSerializer, LabResultSerializer, DoctorToRadiologyOrderSerializer,
-    HCCDiagnosisSerializer
+    HCCDiagnosisSerializer, CreateLabOrderSerializer, CreateDoctorToRadiologyOrderSerializer
 )
 from datetime import date, datetime
 from django.utils import timezone
+from django.db.models import Q
 
 
 class DoctorDashboardView(APIView):
@@ -23,21 +24,19 @@ class DoctorDashboardView(APIView):
         # 오늘 날짜
         today = date.today()
 
-        # 대기 환자 (진료 대기)
+        # 대기 환자 (진료 대기) - 날짜 제한 없이 현재 대기 중인 모든 환자
         clinic_waiting = Encounter.objects.filter(
-            created_at__date=today,
             workflow_state=Encounter.WorkflowState.WAITING_CLINIC
         ).count()
 
-        # 진료 중 환자
+        # 진료 중 환자 - 날짜 제한 없이 현재 진료 중인 모든 환자
         clinic_in_progress = Encounter.objects.filter(
-            created_at__date=today,
             workflow_state=Encounter.WorkflowState.IN_CLINIC
         ).count()
 
-        # 완료 환자
+        # 완료 환자 - 오늘 완료된 환자만
         completed_today = Encounter.objects.filter(
-            created_at__date=today,
+            updated_at__date=today,
             workflow_state=Encounter.WorkflowState.COMPLETED
         ).count()
 
@@ -419,3 +418,131 @@ class DoctorInfoView(APIView):
             return Response({
                 'error': str(e)
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class DoctorMedicalRecordListView(APIView):
+    """
+    의사 본인의 진료 기록(Encounter) 목록 조회 API
+    - 검색 (환자명, 환자ID)
+    - 날짜 필터링
+    """
+    permission_classes = [IsDoctor]
+
+    def get(self, request):
+        try:
+            # 1. 현재 로그인한 의사 찾기
+            doctor = Doctor.objects.get(user=request.user)
+
+            # 2. 쿼리 파라미터
+            search = request.query_params.get('search', '')
+            start_date = request.query_params.get('start_date')
+            end_date = request.query_params.get('end_date')
+            
+            # 3. 기본 쿼리셋 (assigned_doctor 기준)
+            encounters = Encounter.objects.filter(assigned_doctor=doctor).select_related('patient')
+
+            # 4. 검색 필터
+            if search:
+                encounters = encounters.filter(
+                    Q(patient__name__icontains=search) |
+                    Q(patient__patient_id__icontains=search)
+                )
+
+            # 5. 날짜 필터
+            if start_date:
+                encounters = encounters.filter(start_time__date__gte=start_date)
+            if end_date:
+                encounters = encounters.filter(start_time__date__lte=end_date)
+
+            # 6. 정렬 (최신순)
+            encounters = encounters.order_by('-start_time')
+
+            # 7. 시리얼라이즈
+            serializer = EncounterSerializer(encounters, many=True)
+
+            return Response({
+                'count': encounters.count(),
+                'results': serializer.data
+            }, status=status.HTTP_200_OK)
+
+        except Doctor.DoesNotExist:
+             return Response({'error': '의사 정보를 찾을 수 없습니다.'}, status=404)
+        except Exception as e:
+            return Response({'error': str(e)}, status=500)
+
+
+class CreateLabOrderView(APIView):
+    """LabOrder 생성 API"""
+    permission_classes = [IsDoctor]
+
+    def post(self, request):
+        try:
+            # Frontend sends snake_case IDs, need to map to serializer fields if needed
+            # Or serializer fields should match.
+            # DRF ModelSerializer expects 'patient', 'encounter', 'doctor' as PKs by default.
+            
+            data = request.data.copy()
+            
+            # 1. Doctor handling
+            try:
+                doctor = Doctor.objects.get(user=request.user)
+                data['doctor'] = doctor.doctor_id
+            except Doctor.DoesNotExist:
+                # If helper/admin calling this API on behalf of doctor (unlikely but possible)
+                if 'doctor_id' in data:
+                    data['doctor'] = data['doctor_id']
+                else:
+                    return Response({'error': '의사 정보를 찾을 수 없습니다.'}, status=status.HTTP_404_NOT_FOUND)
+
+            # 2. Map frontend IDs to serializer fields
+            if 'patient_id' in data:
+                data['patient'] = data['patient_id']
+            if 'encounter_id' in data:
+                data['encounter'] = data['encounter_id']
+
+            serializer = CreateLabOrderSerializer(data=data)
+            if serializer.is_valid():
+                serializer.save()
+                return Response({
+                    'message': '오더가 성공적으로 생성되었습니다.',
+                    'order': serializer.data
+                }, status=status.HTTP_201_CREATED)
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class CreateDoctorToRadiologyOrderView(APIView):
+    """영상 검사 오더 생성 API"""
+    permission_classes = [IsDoctor]
+
+    def post(self, request):
+        try:
+            data = request.data.copy()
+            
+            # 1. Doctor handling
+            try:
+                doctor = Doctor.objects.get(user=request.user)
+                data['doctor'] = doctor.doctor_id
+            except Doctor.DoesNotExist:
+                 if 'doctor_id' in data:
+                    data['doctor'] = data['doctor_id']
+                 else:
+                    return Response({'error': '의사 정보를 찾을 수 없습니다.'}, status=status.HTTP_404_NOT_FOUND)
+
+            # 2. Map IDs
+            if 'patient_id' in data:
+                data['patient'] = data['patient_id']
+            if 'encounter_id' in data:
+                data['encounter'] = data['encounter_id']
+
+            serializer = CreateDoctorToRadiologyOrderSerializer(data=data)
+            if serializer.is_valid():
+                serializer.save()
+                return Response({
+                    'message': '영상 검사 오더가 성공적으로 생성되었습니다.',
+                    'order': serializer.data
+                }, status=status.HTTP_201_CREATED)
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

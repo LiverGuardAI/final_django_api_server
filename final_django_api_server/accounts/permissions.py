@@ -6,7 +6,7 @@ class IsDoctor(BasePermission):
 
     def has_permission(self, request, view):
         print(f"DEBUG: Checking permission for user {request.user}, role {getattr(request.user, 'role', 'None')}, authenticated: {request.user.is_authenticated}")
-        return request.user.is_authenticated and request.user.role == 'DOCTOR'
+        return request.user.is_authenticated and (request.user.role == 'DOCTOR')
 
 
 class IsRadiologist(BasePermission):

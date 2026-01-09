@@ -1,7 +1,7 @@
 from rest_framework import serializers
 from .models import (
     Patient, Encounter, MedicalRecord, Doctor, Appointment, ScheduleDoctor,
-    LabResult, DoctorToRadiologyOrder, HCCDiagnosis, VitalData, AnthropometricData
+    LabResult, DoctorToRadiologyOrder, HCCDiagnosis, VitalData, AnthropometricData, Questionnaire, LabOrder
 )
 from accounts.models import Department
 from datetime import datetime
@@ -16,12 +16,22 @@ class PatientSerializer(serializers.ModelSerializer):
         fields = '__all__'
 
 
+class QuestionnaireSerializer(serializers.ModelSerializer):
+    """문진표 Serializer"""
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+
+    class Meta:
+        model = Questionnaire
+        fields = ['questionnaire_id', 'status', 'status_display', 'data', 'created_at', 'updated_at']
+
+
 class EncounterSerializer(serializers.ModelSerializer):
     """방문/진료 세션 Serializer (대기열 관리용)"""
     patient = PatientSerializer(read_only=True)
     status_display = serializers.CharField(source='get_status_display', read_only=True)
     workflow_state_display = serializers.CharField(source='get_workflow_state_display', read_only=True)
     patient_name = serializers.CharField(source='patient.name', read_only=True)
+    questionnaire = QuestionnaireSerializer(read_only=True)  # 문진표 데이터 포함
 
     class Meta:
         model = Encounter
@@ -137,3 +147,17 @@ class MedicalRecordDetailSerializer(serializers.ModelSerializer):
 # Backward compatibility alias
 EncounterDetailSerializer = MedicalRecordDetailSerializer
 ImagingOrderSerializer = DoctorToRadiologyOrderSerializer
+
+
+class CreateLabOrderSerializer(serializers.ModelSerializer):
+    """LabOrder 생성 Serializer"""
+    class Meta:
+        model = LabOrder
+        fields = ['patient', 'encounter', 'doctor', 'order_type', 'order_notes']
+
+
+class CreateDoctorToRadiologyOrderSerializer(serializers.ModelSerializer):
+    """영상 검사 오더 생성 Serializer"""
+    class Meta:
+        model = DoctorToRadiologyOrder
+        fields = ['patient', 'encounter', 'doctor', 'modality', 'body_part', 'order_notes']
