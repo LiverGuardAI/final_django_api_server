@@ -3,7 +3,8 @@ from .views import (
     DoctorDashboardView, PatientListView, QueueListView, UpdateEncounterStatusView,
     DoctorListView, EncounterDetailView, PatientEncounterHistoryView,
     PatientLabResultsView, PatientDoctorToRadiologyOrdersView, PatientHCCDiagnosisView,
-    DoctorInfoView, DoctorMedicalRecordListView, CreateLabOrderView, CreateDoctorToRadiologyOrderView
+    DoctorInfoView, DoctorMedicalRecordListView, CreateLabOrderView, CreateDoctorToRadiologyOrderView,
+    PatientCTSeriesView, PatientGenomicDataView
 )
 
 urlpatterns = [
@@ -18,6 +19,8 @@ urlpatterns = [
     path('patient/<str:patient_id>/lab-results/', PatientLabResultsView.as_view(), name='patient_lab_results'),
     path('patient/<str:patient_id>/doctor-to-radiology-orders/', PatientDoctorToRadiologyOrdersView.as_view(), name='patient_imaging_orders'),
     path('patient/<str:patient_id>/hcc-diagnosis/', PatientHCCDiagnosisView.as_view(), name='patient_hcc_diagnosis'),
+    path('patient/<str:patient_id>/genomic-data/', PatientGenomicDataView.as_view(), name='patient_genomic_data'),
+    path('patient/<str:patient_id>/ct-series/', PatientCTSeriesView.as_view(), name='patient_ct_series'),
     path('list/', DoctorListView.as_view(), name='doctor_list'),
     path('lab-orders/', CreateLabOrderView.as_view(), name='create_lab_order'),
     path('doctor-to-radiology-orders/', CreateDoctorToRadiologyOrderView.as_view(), name='create_imaging_order'),
