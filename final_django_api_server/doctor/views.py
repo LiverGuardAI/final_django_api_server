@@ -3,6 +3,7 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from accounts.permissions import IsDoctor
+<<<<<<< HEAD
 from .models import Encounter, MedicalRecord, Patient, Doctor, LabResult, DoctorToRadiologyOrder, HCCDiagnosis, GenomicData, LabOrder
 from radiology.models import DICOMStudy, DICOMSeries
 from .serializers import (
@@ -10,6 +11,15 @@ from .serializers import (
     MedicalRecordDetailSerializer, LabResultSerializer, DoctorToRadiologyOrderSerializer,
     HCCDiagnosisSerializer, CreateLabOrderSerializer, CreateDoctorToRadiologyOrderSerializer, LabOrderSerializer
 )
+=======
+from .models import Encounter, MedicalRecord, Patient, Doctor, LabResult, DoctorToRadiologyOrder, HCCDiagnosis, GenomicData
+from radiology.models import DICOMStudy, DICOMSeries
+from .serializers import (
+    EncounterSerializer, MedicalRecordSerializer, UpdateEncounterStatusSerializer, DoctorListSerializer,
+    MedicalRecordDetailSerializer, LabResultSerializer, DoctorToRadiologyOrderSerializer,
+    HCCDiagnosisSerializer, CreateLabOrderSerializer, CreateDoctorToRadiologyOrderSerializer
+)
+>>>>>>> 1e73590 (feat add endpoints for lab and genomic result creation)
 from datetime import date, datetime
 from django.utils import timezone
 from django.db.models import Q
@@ -365,6 +375,7 @@ class PatientLabResultsView(APIView):
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
+
 class PatientDoctorToRadiologyOrdersView(APIView):
     """특정 환자의 영상 검사 오더 목록 조회 API (의사 -> 영상의학과)"""
     permission_classes = [IsDoctor]
@@ -414,6 +425,7 @@ class PatientHCCDiagnosisView(APIView):
                 'results': serializer.data
             }, status=status.HTTP_200_OK)
 
+<<<<<<< HEAD
         except Exception as e:
             return Response({
                 'error': str(e)
@@ -490,6 +502,85 @@ class PatientCTSeriesView(APIView):
 
 
 class DoctorInfoView(APIView):
+=======
+        except Exception as e:
+            return Response({
+                'error': str(e)
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class PatientGenomicDataView(APIView):
+    """특정 환자의 유전체 검사 데이터 목록 조회 API"""
+    permission_classes = [IsDoctor]
+
+    def get(self, request, patient_id):
+        try:
+            genomic_qs = GenomicData.objects.filter(
+                patient_id=patient_id
+            ).order_by('-sample_date', '-genomic_id')
+
+            limit = request.query_params.get('limit', None)
+            if limit:
+                genomic_qs = genomic_qs[:int(limit)]
+
+            results = list(genomic_qs.values(
+                'genomic_id',
+                'sample_date',
+                'created_at',
+            ))
+
+            return Response({
+                'count': genomic_qs.count(),
+                'results': results
+            }, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            return Response({
+                'error': str(e)
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+
+class PatientCTSeriesView(APIView):
+    """특정 환자의 CT 시리즈 목록 조회 API"""
+    permission_classes = [IsDoctor]
+
+    def get(self, request, patient_id):
+        try:
+            study_uids = list(
+                DICOMStudy.objects.filter(patient_id=patient_id)
+                .values_list('study_uid', flat=True)
+            )
+            if not study_uids:
+                return Response({'count': 0, 'results': []}, status=status.HTTP_200_OK)
+
+            series_qs = (
+                DICOMSeries.objects.filter(study_id__in=study_uids, modality='CT')
+                .select_related('study')
+                .values(
+                    'series_uid',
+                    'study_id',
+                    'series_description',
+                    'series_number',
+                    'modality',
+                    'study__study_datetime',
+                )
+                .order_by('study_id', 'series_number', 'series_uid')
+            )
+
+            return Response({
+                'count': series_qs.count(),
+                'results': list(series_qs)
+            }, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            return Response({
+                'error': str(e)
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class DoctorInfoView(APIView):
+>>>>>>> 1e73590 (feat add endpoints for lab and genomic result creation)
     """현재 로그인한 의사 정보 조회 API"""
     permission_classes = [IsDoctor]
 
