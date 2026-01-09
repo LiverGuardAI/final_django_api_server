@@ -28,6 +28,7 @@ urlpatterns = [
     path('api/administration/', include('administration.urls')),  # 원무과 API
     path('api/orthanc/', include('orthanc_server.urls')),  # Orthanc 프록시 API
     path('api/kakaomap/', include('kakaomap.urls')),  # Kakao Map API
+    path('api/patients/', include('patients.urls')),  # Patients (앱) API
 ]
 
 # Static files serving (for development and production)
