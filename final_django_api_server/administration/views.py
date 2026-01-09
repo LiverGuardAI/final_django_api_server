@@ -402,12 +402,16 @@ class EncounterDetailView(APIView):
             if encounter_status:
                 if encounter_status == 'IN_PROGRESS':
                     new_workflow_state = Encounter.WorkflowState.IN_CLINIC
+                elif encounter_status == 'IN_CLINIC':
+                    new_workflow_state = Encounter.WorkflowState.IN_CLINIC
                 elif encounter_status == 'WAITING':
                     new_workflow_state = Encounter.WorkflowState.WAITING_CLINIC
                 elif encounter_status == 'COMPLETED':
                     new_workflow_state = Encounter.WorkflowState.COMPLETED
                 elif encounter_status == 'CANCELLED':
                     new_workflow_state = Encounter.WorkflowState.CANCELLED
+                elif encounter_status == 'WAITING_RESULTS':
+                    new_workflow_state = Encounter.WorkflowState.WAITING_RESULTS
 
             # 2. Internal / Legacy (workflow_state, status) - Fallback
             if not new_workflow_state:
@@ -421,7 +425,8 @@ class EncounterDetailView(APIView):
                 if new_workflow_state in [Encounter.WorkflowState.REQUESTED, Encounter.WorkflowState.REGISTERED]:
                     encounter.status = Encounter.Status.PLANNED
                 elif new_workflow_state in [Encounter.WorkflowState.WAITING_CLINIC, Encounter.WorkflowState.IN_CLINIC,
-                                            Encounter.WorkflowState.WAITING_IMAGING, Encounter.WorkflowState.IN_IMAGING]:
+                                            Encounter.WorkflowState.WAITING_IMAGING, Encounter.WorkflowState.IN_IMAGING,
+                                            Encounter.WorkflowState.WAITING_RESULTS]:
                     encounter.status = Encounter.Status.IN_PROGRESS
                 elif new_workflow_state == Encounter.WorkflowState.COMPLETED:
                     encounter.status = Encounter.Status.COMPLETED
@@ -543,13 +548,24 @@ class WaitingQueueView(APIView):
             }, status=status.HTTP_200_OK)
 
         # 캐시 미스: DB에서 조회 후 Redis에 저장 (state_entered_at 기준 FIFO)
-        # WAITING_CLINIC과 IN_CLINIC 모두 포함 (원무과 대기열 화면용)
-        queryset = Encounter.objects.filter(
-            workflow_state__in=[
-                Encounter.WorkflowState.WAITING_CLINIC,
-                Encounter.WorkflowState.IN_CLINIC
-            ]
-        ).select_related('patient', 'assigned_doctor').order_by('state_entered_at')
+        # 캐시 미스: DB에서 조회 후 Redis에 저장 (state_entered_at 기준 FIFO)
+        from django.db.models import Q
+        from django.utils import timezone
+        
+        # 기본 대기열 상태: 대기중, 진료중
+        filter_condition = Q(workflow_state__in=[
+            Encounter.WorkflowState.WAITING_CLINIC,
+            Encounter.WorkflowState.IN_CLINIC
+        ])
+
+        # 오늘 완료된 진료는 항상 포함 (의사 사이드바 및 원무과 대기현황용)
+        today = timezone.localdate()
+        filter_condition = filter_condition | Q(
+             workflow_state=Encounter.WorkflowState.COMPLETED,
+             updated_at__date=today
+        )
+
+        queryset = Encounter.objects.filter(filter_condition).select_related('patient', 'assigned_doctor').order_by('state_entered_at')
         
         if doctor_id:
              try:
@@ -664,3 +680,124 @@ class DashboardStatsView(APIView):
             'timestamp': datetime.now().isoformat(),
             'stats': stats
         }, status=status.HTTP_200_OK)
+
+class PendingOrdersView(APIView):
+    """
+    모든 미처리 오더(검사 대기) 목록 조회 API ("추가진료" 탭용)
+    - LabOrder (REQUESTED)
+    - DoctorToRadiologyOrder (REQUESTED)
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        try:
+            from doctor.models import LabOrder, DoctorToRadiologyOrder
+            from django.utils import timezone
+
+            today_start = timezone.localtime(timezone.now()).replace(hour=0, minute=0, second=0, microsecond=0)
+            
+            # 1. Lab Orders (REQUESTED) - 오늘 날짜 기준
+            lab_orders = LabOrder.objects.filter(
+                status='REQUESTED',
+                created_at__gte=today_start
+            ).select_related('patient', 'doctor', 'doctor__department').order_by('-created_at')
+
+            # 2. Imaging Orders (REQUESTED) - 오늘 날짜 기준
+            imaging_orders = DoctorToRadiologyOrder.objects.filter(
+                status='REQUESTED',
+                ordered_at__gte=today_start
+            ).select_related('patient', 'doctor', 'doctor__department').order_by('-ordered_at')
+
+            results = []
+
+            # Lab Order 변환
+            for order in lab_orders:
+                results.append({
+                    'id': f'lab_{order.order_id}',
+                    'type': 'LAB',
+                    'type_display': '진단검사',
+                    'order_name': order.get_order_type_display(),
+                    'patient_id': order.patient.patient_id,
+                    'patient_name': order.patient.name,
+                    'doctor_name': order.doctor.name,
+                    'department_name': order.doctor.department.dept_name if order.doctor.department else 'N/A',
+                    'created_at': order.created_at,
+                    'status': order.status,
+                    'status_display': '검사대기'
+                })
+
+            # Imaging Order 변환
+            for order in imaging_orders:
+                results.append({
+                    'id': f'img_{order.order_id}',
+                    'type': 'IMAGING',
+                    'type_display': '영상의학',
+                    'order_name': f"{order.modality} ({order.body_part or '전신'})",
+                    'patient_id': order.patient.patient_id,
+                    'patient_name': order.patient.name,
+                    'doctor_name': order.doctor.name,
+                    'department_name': order.doctor.department.dept_name if order.doctor.department else 'N/A',
+                    'created_at': order.ordered_at,
+                    'status': order.status,
+                    'status_display': '촬영대기'
+                })
+
+            # 최신순 정렬 (created_at 기준)
+            results.sort(key=lambda x: x['created_at'], reverse=True)
+
+            return Response({
+                'count': len(results),
+                'results': results
+            }, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class ConfirmOrderView(APIView):
+    """
+    오더 접수 및 처리 API (관리자용)
+    - 오더 상태 변경 (REQUESTED -> WAITING/IN_PROGRESS)
+    - 선택적 귀가 조치 (Encounter -> COMPLETED)
+    """
+    permission_classes = [IsAuthenticated]
+
+    def patch(self, request, order_id):
+        try:
+            order_type = request.data.get('order_type') # 'LAB' or 'IMAGING'
+            action = request.data.get('action') # 'CONFIRM' or 'CONFIRM_AND_DISCHARGE'
+            
+            from doctor.models import LabOrder, DoctorToRadiologyOrder, Encounter
+            from django.utils import timezone
+
+            encounter_to_close = None
+
+            if order_type == 'LAB':
+                order = LabOrder.objects.get(order_id=order_id)
+                order.status = 'IN_PROGRESS' # 접수 완료 -> 검사 중
+                order.save()
+                encounter_to_close = order.encounter
+            
+            elif order_type == 'IMAGING':
+                order = DoctorToRadiologyOrder.objects.get(order_id=order_id)
+                order.status = 'WAITING' # 접수 완료 -> 촬영 대기
+                order.save()
+                encounter_to_close = order.encounter
+            
+            else:
+                return Response({'error': 'Invalid order type'}, status=status.HTTP_400_BAD_REQUEST)
+
+            # 귀가 조치 로직
+            if action == 'CONFIRM_AND_DISCHARGE' and encounter_to_close:
+                encounter_to_close.workflow_state = Encounter.WorkflowState.COMPLETED
+                encounter_to_close.status = Encounter.Status.COMPLETED
+                encounter_to_close.end_time = timezone.now()
+                encounter_to_close.save()
+
+            return Response({'message': '오더가 처리되었습니다.'}, status=status.HTTP_200_OK)
+
+        except (LabOrder.DoesNotExist, DoctorToRadiologyOrder.DoesNotExist):
+             return Response({'error': '오더를 찾을 수 없습니다.'}, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+

@@ -3,14 +3,18 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from accounts.permissions import IsDoctor
-from .models import Encounter, MedicalRecord, Patient, Doctor, LabResult, DoctorToRadiologyOrder, HCCDiagnosis
+from .models import Encounter, MedicalRecord, Patient, Doctor, LabResult, DoctorToRadiologyOrder, HCCDiagnosis, GenomicData, LabOrder
+from radiology.models import DICOMStudy, DICOMSeries
 from .serializers import (
     EncounterSerializer, MedicalRecordSerializer, UpdateEncounterStatusSerializer, DoctorListSerializer,
     MedicalRecordDetailSerializer, LabResultSerializer, DoctorToRadiologyOrderSerializer,
-    HCCDiagnosisSerializer
+    HCCDiagnosisSerializer, CreateLabOrderSerializer, CreateDoctorToRadiologyOrderSerializer, LabOrderSerializer
 )
 from datetime import date, datetime
 from django.utils import timezone
+from django.db.models import Q
+from channels.layers import get_channel_layer
+from asgiref.sync import async_to_sync
 
 
 class DoctorDashboardView(APIView):
@@ -23,21 +27,19 @@ class DoctorDashboardView(APIView):
         # 오늘 날짜
         today = date.today()
 
-        # 대기 환자 (진료 대기)
+        # 대기 환자 (진료 대기) - 날짜 제한 없이 현재 대기 중인 모든 환자
         clinic_waiting = Encounter.objects.filter(
-            created_at__date=today,
             workflow_state=Encounter.WorkflowState.WAITING_CLINIC
         ).count()
 
-        # 진료 중 환자
+        # 진료 중 환자 - 날짜 제한 없이 현재 진료 중인 모든 환자
         clinic_in_progress = Encounter.objects.filter(
-            created_at__date=today,
             workflow_state=Encounter.WorkflowState.IN_CLINIC
         ).count()
 
-        # 완료 환자
+        # 완료 환자 - 오늘 완료된 환자만
         completed_today = Encounter.objects.filter(
-            created_at__date=today,
+            updated_at__date=today,
             workflow_state=Encounter.WorkflowState.COMPLETED
         ).count()
 
@@ -164,7 +166,8 @@ class UpdateEncounterStatusView(APIView):
                     if new_workflow_state in [Encounter.WorkflowState.REQUESTED, Encounter.WorkflowState.REGISTERED]:
                         encounter.status = Encounter.Status.PLANNED
                     elif new_workflow_state in [Encounter.WorkflowState.WAITING_CLINIC, Encounter.WorkflowState.IN_CLINIC,
-                                                Encounter.WorkflowState.WAITING_IMAGING, Encounter.WorkflowState.IN_IMAGING]:
+                                                Encounter.WorkflowState.WAITING_IMAGING, Encounter.WorkflowState.IN_IMAGING,
+                                                Encounter.WorkflowState.WAITING_RESULTS]:
                         encounter.status = Encounter.Status.IN_PROGRESS
                     elif new_workflow_state == Encounter.WorkflowState.COMPLETED:
                         encounter.status = Encounter.Status.COMPLETED
@@ -265,13 +268,35 @@ class MedicalRecordDetailView(APIView):
 
 
 class EncounterDetailView(APIView):
-    """Encounter 상세 정보 조회 API"""
-    permission_classes = [IsDoctor]
+    """
+    Encounter 상세 정보 조회 API
+    - 의사: 진료 및 처방 가능
+    - 원무과: 조회 전용 (진료비 수납 등 확인용)
+    """
+    permission_classes = [IsAuthenticated]  # 의사 + 원무과 모두 접근 허용
 
     def get(self, request, encounter_id):
         try:
             encounter = Encounter.objects.get(encounter_id=encounter_id)
-            serializer = EncounterSerializer(encounter)
+            
+            # 해당 Encounter와 연결된 MedicalRecord 조회
+            # (진료 완료된 기록을 우선 찾고, 없으면 가장 최근 기록)
+            medical_record = encounter.medical_records.filter(
+                record_status=MedicalRecord.RecordStatus.COMPLETED
+            ).last()
+            
+            if not medical_record:
+                # 완료된 기록이 없으면 작성 중인 기록이라도 조회
+                medical_record = encounter.medical_records.last()
+            
+            if medical_record:
+                # 진료 기록이 있으면 상세 정보 반환 (진단명, 오더 등 포함)
+                serializer = MedicalRecordDetailSerializer(medical_record)
+            else:
+                # 진료 기록이 아직 생성되지 않았으면 기본 Encounter 정보 반환 (대기 중 상태 등)
+                # 주의: 프론트엔드에서 필드 차이 처리 필요할 수 있음
+                serializer = EncounterSerializer(encounter)
+                
             return Response(serializer.data, status=status.HTTP_200_OK)
         except Encounter.DoesNotExist:
             return Response({'error': '해당 방문 기록을 찾을 수 없습니다.'}, status=404)
@@ -343,6 +368,7 @@ class PatientLabResultsView(APIView):
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
+
 class PatientDoctorToRadiologyOrdersView(APIView):
     """특정 환자의 영상 검사 오더 목록 조회 API (의사 -> 영상의학과)"""
     permission_classes = [IsDoctor]
@@ -398,6 +424,75 @@ class PatientHCCDiagnosisView(APIView):
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
+class PatientGenomicDataView(APIView):
+    """특정 환자의 유전체 검사 데이터 목록 조회 API"""
+    permission_classes = [IsDoctor]
+
+    def get(self, request, patient_id):
+        try:
+            genomic_qs = GenomicData.objects.filter(
+                patient_id=patient_id
+            ).order_by('-sample_date', '-genomic_id')
+
+            limit = request.query_params.get('limit', None)
+            if limit:
+                genomic_qs = genomic_qs[:int(limit)]
+
+            results = list(genomic_qs.values(
+                'genomic_id',
+                'sample_date',
+                'created_at',
+            ))
+
+            return Response({
+                'count': genomic_qs.count(),
+                'results': results
+            }, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            return Response({
+                'error': str(e)
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class PatientCTSeriesView(APIView):
+    """특정 환자의 CT 시리즈 목록 조회 API"""
+    permission_classes = [IsDoctor]
+
+    def get(self, request, patient_id):
+        try:
+            study_uids = list(
+                DICOMStudy.objects.filter(patient_id=patient_id)
+                .values_list('study_uid', flat=True)
+            )
+            if not study_uids:
+                return Response({'count': 0, 'results': []}, status=status.HTTP_200_OK)
+
+            series_qs = (
+                DICOMSeries.objects.filter(study_id__in=study_uids, modality='CT')
+                .select_related('study')
+                .values(
+                    'series_uid',
+                    'study_id',
+                    'series_description',
+                    'series_number',
+                    'modality',
+                    'study__study_datetime',
+                )
+                .order_by('study_id', 'series_number', 'series_uid')
+            )
+
+            return Response({
+                'count': series_qs.count(),
+                'results': list(series_qs)
+            }, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            return Response({
+                'error': str(e)
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
 class DoctorInfoView(APIView):
     """현재 로그인한 의사 정보 조회 API"""
     permission_classes = [IsDoctor]
@@ -419,3 +514,191 @@ class DoctorInfoView(APIView):
             return Response({
                 'error': str(e)
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class DoctorMedicalRecordListView(APIView):
+    """
+    의사 본인의 진료 기록(Encounter) 목록 조회 API
+    - 검색 (환자명, 환자ID)
+    - 날짜 필터링
+    """
+    permission_classes = [IsDoctor]
+
+    def get(self, request):
+        try:
+            # 1. 현재 로그인한 의사 찾기
+            doctor = Doctor.objects.get(user=request.user)
+
+            # 2. 쿼리 파라미터
+            search = request.query_params.get('search', '')
+            start_date = request.query_params.get('start_date')
+            end_date = request.query_params.get('end_date')
+            
+            # 3. 기본 쿼리셋 (assigned_doctor 기준)
+            encounters = Encounter.objects.filter(assigned_doctor=doctor).select_related('patient')
+
+            # 4. 검색 필터
+            if search:
+                encounters = encounters.filter(
+                    Q(patient__name__icontains=search) |
+                    Q(patient__patient_id__icontains=search)
+                )
+
+            # 5. 날짜 필터
+            if start_date:
+                encounters = encounters.filter(start_time__date__gte=start_date)
+            if end_date:
+                encounters = encounters.filter(start_time__date__lte=end_date)
+
+            # 6. 정렬 (최신순)
+            encounters = encounters.order_by('-start_time')
+
+            # 7. 시리얼라이즈
+            serializer = EncounterSerializer(encounters, many=True)
+
+            return Response({
+                'count': encounters.count(),
+                'results': serializer.data
+            }, status=status.HTTP_200_OK)
+
+        except Doctor.DoesNotExist:
+             return Response({'error': '의사 정보를 찾을 수 없습니다.'}, status=404)
+        except Exception as e:
+            return Response({'error': str(e)}, status=500)
+
+
+class CreateLabOrderView(APIView):
+    """LabOrder 생성 API"""
+    permission_classes = [IsDoctor]
+
+    def post(self, request):
+        try:
+            # Frontend sends snake_case IDs, need to map to serializer fields if needed
+            # Or serializer fields should match.
+            # DRF ModelSerializer expects 'patient', 'encounter', 'doctor' as PKs by default.
+            
+            data = request.data.copy()
+            
+            # 1. Doctor handling
+            try:
+                doctor = Doctor.objects.get(user=request.user)
+                data['doctor'] = doctor.doctor_id
+            except Doctor.DoesNotExist:
+                # If helper/admin calling this API on behalf of doctor (unlikely but possible)
+                if 'doctor_id' in data:
+                    data['doctor'] = data['doctor_id']
+                else:
+                    return Response({'error': '의사 정보를 찾을 수 없습니다.'}, status=status.HTTP_404_NOT_FOUND)
+
+            # 2. Map frontend IDs to serializer fields
+            if 'patient_id' in data:
+                data['patient'] = data['patient_id']
+            if 'encounter_id' in data:
+                data['encounter'] = data['encounter_id']
+
+            serializer = CreateLabOrderSerializer(data=data)
+            if serializer.is_valid():
+                serializer.save()
+            
+                # WebSocket 알림 전송 (관리자에게)
+                try:
+                    channel_layer = get_channel_layer()
+                    async_to_sync(channel_layer.group_send)(
+                        "clinic_dashboard",  # 관리자가 구독 중인 그룹
+                        {
+                            "type": "new_order",
+                            "message": f"{data.get('patient_name', '환자')}의 혈액검사 오더가 도착했습니다.",
+                            "data": {
+                                "order_type": "LAB",
+                                "patient_id": data.get('patient'),
+                                "doctor_id": data.get('doctor')
+                            }
+                        }
+                    )
+                except Exception as wse:
+                     print(f"WebSocket send failed: {wse}")
+
+                return Response({
+                    'message': '오더가 성공적으로 생성되었습니다.',
+                    'order': serializer.data
+                }, status=status.HTTP_201_CREATED)
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class CreateDoctorToRadiologyOrderView(APIView):
+    """영상 검사 오더 생성 API"""
+    permission_classes = [IsDoctor]
+
+    def post(self, request):
+        try:
+            data = request.data.copy()
+            
+            # 1. Doctor handling
+            try:
+                doctor = Doctor.objects.get(user=request.user)
+                data['doctor'] = doctor.doctor_id
+            except Doctor.DoesNotExist:
+                 if 'doctor_id' in data:
+                    data['doctor'] = data['doctor_id']
+                 else:
+                    return Response({'error': '의사 정보를 찾을 수 없습니다.'}, status=status.HTTP_404_NOT_FOUND)
+
+            # 2. Map IDs
+            if 'patient_id' in data:
+                data['patient'] = data['patient_id']
+            if 'encounter_id' in data:
+                data['encounter'] = data['encounter_id']
+
+            serializer = CreateDoctorToRadiologyOrderSerializer(data=data)
+            if serializer.is_valid():
+                serializer.save()
+
+                # WebSocket 알림 전송 (관리자에게)
+                try:
+                    channel_layer = get_channel_layer()
+                    async_to_sync(channel_layer.group_send)(
+                        "clinic_dashboard",
+                        {
+                            "type": "new_order",
+                            "message": f"{data.get('patient_name', '환자')}의 영상검사 오더가 도착했습니다.",
+                            "data": {
+                                "order_type": "IMAGING",
+                                "patient_id": data.get('patient'),
+                                "doctor_id": data.get('doctor')
+                            }
+                        }
+                    )
+                except Exception as wse:
+                     print(f"WebSocket send failed: {wse}")
+
+                return Response({
+                    'message': '영상 검사 오더가 성공적으로 생성되었습니다.',
+                    'order': serializer.data
+                }, status=status.HTTP_201_CREATED)
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+class PatientLabOrdersView(APIView):
+    """특정 환자의 Lab Orde 목록 조회 API"""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, patient_id):
+        try:
+            # 최근 오더 순으로 정렬
+            orders = LabOrder.objects.filter(patient_id=patient_id).order_by('-created_at')
+            
+            # 페이지네이션 등은 필요 시 추가 (지금은 전체 반환 or limit)
+            limit = request.query_params.get('limit')
+            if limit:
+                orders = orders[:int(limit)]
+                
+            serializer = LabOrderSerializer(orders, many=True)
+            return Response({
+                'count': len(serializer.data),
+                'results': serializer.data
+            }, status=status.HTTP_200_OK)
+        except Exception as e:
+            return Response({'error': str(e)}, status=500)

@@ -124,6 +124,7 @@ class Encounter(models.Model):
         REGISTERED = 'REGISTERED', '접수완료'
         WAITING_CLINIC = 'WAITING_CLINIC', '진료대기'
         IN_CLINIC = 'IN_CLINIC', '진료중'
+        WAITING_RESULTS = 'WAITING_RESULTS', '결과대기'
         WAITING_IMAGING = 'WAITING_IMAGING', '촬영대기'
         IN_IMAGING = 'IN_IMAGING', '촬영중'
         COMPLETED = 'COMPLETED', '완료'
@@ -213,8 +214,6 @@ class MedicalRecord(models.Model):
     clinical_notes = models.TextField(blank=True, null=True)
     lab_recorded = models.BooleanField(default=False)
     ct_recorded = models.BooleanField(default=False)
-
-    # 문진표 관리 필드 제거됨 (Questionnaire 모델로 이동)
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -430,6 +429,8 @@ class LabOrder(models.Model):
     class OrderType(models.TextChoices):
         BLOOD_LIVER = 'BLOOD_LIVER', '간기능 혈액검사'  # LFT, CBC 등
         GENOMIC = 'GENOMIC', '유전체 분석'          # 유전자 3개 분석
+        PHYSICAL = 'PHYSICAL', '신체 계측'          # 키, 몸무게 등
+        VITAL = 'VITAL', '바이탈 측정'              # 혈압, 맥박, 체온 등
 
     class OrderStatus(models.TextChoices):
         REQUESTED = 'REQUESTED', '요청됨'
@@ -441,6 +442,9 @@ class LabOrder(models.Model):
     
     # [핵심] 이 오더가 어떤 검사인지 명시
     order_type = models.CharField(max_length=20, choices=OrderType.choices)
+    
+    # 특이사항 (JSON으로 유연하게 저장)
+    order_notes = models.JSONField(default=dict, blank=True)
     
     status = models.CharField(
         max_length=20, 

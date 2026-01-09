@@ -88,6 +88,7 @@ DATABASES = {
         'PASSWORD': os.environ.get('POSTGRES_PASSWORD', 'postgres1234'),
         'HOST': os.environ.get('POSTGRES_HOST', '34.67.62.238'),
         'PORT': os.environ.get('POSTGRES_PORT', '5432'),
+        'CONN_MAX_AGE': 60,
         'OPTIONS': {
             'options': '-c timezone=Asia/Seoul'
         },

@@ -11,6 +11,8 @@ from .views import (
     WaitingQueueView,
     CallNextPatientView,
     DashboardStatsView,
+    PendingOrdersView,
+    ConfirmOrderView,
 )
 
 urlpatterns = [
@@ -35,4 +37,8 @@ urlpatterns = [
     path('queue/', WaitingQueueView.as_view(), name='waiting_queue'),  # /api/administration/queue/
     path('queue/waiting/', WaitingQueueView.as_view(), name='waiting_queue_alt'),  # 하위 호환성 유지
     path('queue/call-next/', CallNextPatientView.as_view(), name='call_next_patient'),
+
+    # 오더 관리 (추가진료 탭)
+    path('orders/pending/', PendingOrdersView.as_view(), name='pending_orders'),
+    path('orders/<int:order_id>/confirm/', ConfirmOrderView.as_view(), name='confirm_order'),
 ]
