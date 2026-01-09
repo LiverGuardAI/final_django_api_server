@@ -368,6 +368,7 @@ class PatientLabResultsView(APIView):
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
+
 class PatientDoctorToRadiologyOrdersView(APIView):
     """특정 환자의 영상 검사 오더 목록 조회 API (의사 -> 영상의학과)"""
     permission_classes = [IsDoctor]

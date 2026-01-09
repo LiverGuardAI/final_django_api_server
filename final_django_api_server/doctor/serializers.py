@@ -1,7 +1,8 @@
 from rest_framework import serializers
 from .models import (
     Patient, Encounter, MedicalRecord, Doctor, Appointment, ScheduleDoctor,
-    LabResult, DoctorToRadiologyOrder, HCCDiagnosis, VitalData, AnthropometricData, Questionnaire, LabOrder
+    LabResult, DoctorToRadiologyOrder, HCCDiagnosis, VitalData, AnthropometricData,
+    Questionnaire, LabOrder, GenomicData
 )
 from accounts.models import Department
 from datetime import datetime
@@ -93,6 +94,15 @@ class LabResultSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = LabResult
+        fields = '__all__'
+
+
+class GenomicDataSerializer(serializers.ModelSerializer):
+    """유전체 검사 결과 Serializer"""
+    patient_name = serializers.CharField(source='patient.name', read_only=True)
+
+    class Meta:
+        model = GenomicData
         fields = '__all__'
 
 
