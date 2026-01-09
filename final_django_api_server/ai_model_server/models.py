@@ -10,8 +10,8 @@ class RadioFeatureVector(models.Model):
     radio_vector_id = models.AutoField(primary_key=True)
     extraction_model = models.CharField(max_length=20, blank=True, null=True)
     model_version = models.CharField(max_length=20, blank=True, null=True)
-    vector_dim = models.IntegerField(default=2048)
-    feature_vector = VectorField(dimensions=2048, blank=True, null=True)
+    vector_dim = models.IntegerField(default=512)
+    feature_vector = VectorField(dimensions=512, blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

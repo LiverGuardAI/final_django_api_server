@@ -4,6 +4,22 @@ import os
 import msgpack
 
 
+def _get_series_instance_uid(orthanc_base_url, orthanc_series_id):
+    if not orthanc_series_id:
+        return None
+    try:
+        response = requests.get(
+            f"{orthanc_base_url}/series/{orthanc_series_id}",
+            timeout=30,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        return payload.get('MainDicomTags', {}).get('SeriesInstanceUID')
+    except Exception as e:
+        print(f"Failed to fetch SeriesInstanceUID for series_id={orthanc_series_id}: {str(e)}")
+        return None
+
+
 @shared_task(bind=True, name='ai_model_server.process_segmentation', max_retries=0)
 def process_segmentation(self, series_id):
     """
@@ -50,6 +66,37 @@ def process_segmentation(self, series_id):
                 'progress': 90
             }
         )
+
+        try:
+            from radiology.models import RadiologyAIRun
+
+            orthanc_url = os.getenv('ORTHANC_BASE_URL', 'http://34.67.62.238/orthanc')
+            series_instance_uid = _get_series_instance_uid(orthanc_url, series_id)
+
+            mask_series_uid = (
+                result.get('mask_series_uid')
+                or result.get('mask_seriesinstanceuid')
+            )
+            if not mask_series_uid:
+                mask_series_id = result.get('mask_series_id')
+                mask_series_uid = _get_series_instance_uid(orthanc_url, mask_series_id)
+
+            run = (
+                RadiologyAIRun.objects.filter(series__series_uid=series_instance_uid)
+                .order_by('-created_at')
+                .first()
+            )
+            if not run:
+                print(f"RadiologyAIRun not found for series_instance_uid={series_instance_uid}")
+            else:
+                update_fields = ['status']
+                run.status = RadiologyAIRun.RunStatus.COMPLETED
+                if mask_series_uid:
+                    run.mask_series_uid = mask_series_uid
+                    update_fields.append('mask_series_uid')
+                run.save(update_fields=update_fields)
+        except Exception as e:
+            print(f"Failed to update RadiologyAIRun after segmentation: {str(e)}")
 
         return {
             'status': 'success',
@@ -112,6 +159,53 @@ def process_feature_extraction(self, series_instance_uid):
                 'progress': 90
             }
         )
+
+        try:
+            from radiology.models import RadiologyAIRun
+            from .models import RadioFeatureVector
+
+            run = (
+                RadiologyAIRun.objects.filter(series__series_uid=series_instance_uid)
+                .select_related('series')
+                .order_by('-created_at')
+                .first()
+            )
+            if not run:
+                print(f"RadiologyAIRun not found for seriesinstanceuid={series_instance_uid}")
+            else:
+                features = result.get('features') or result.get('feature_vector')
+                if features is None:
+                    print(f"Feature vector missing for seriesinstanceuid={series_instance_uid}")
+                else:
+                    if hasattr(features, 'tolist'):
+                        features = features.tolist()
+                    elif not isinstance(features, list):
+                        try:
+                            features = list(features)
+                        except TypeError:
+                            features = [features]
+
+                    feature_dim = result.get('feature_dim')
+                    if feature_dim is None:
+                        feature_dim = len(features)
+                    else:
+                        try:
+                            feature_dim = int(feature_dim)
+                        except (TypeError, ValueError):
+                            feature_dim = len(features)
+
+                    RadioFeatureVector.objects.update_or_create(
+                        series=run.series,
+                        run=run,
+                        defaults={
+                            'extraction_model': result.get('model_name') or result.get('extraction_model'),
+                            'model_version': result.get('model_version'),
+                            'vector_dim': feature_dim,
+                            'feature_vector': features,
+                        },
+                    )
+        except Exception as e:
+            print(f"Failed to save feature vector: {str(e)}")
 
         return {
             'status': 'success',
