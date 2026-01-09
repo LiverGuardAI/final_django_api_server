@@ -430,6 +430,8 @@ class LabOrder(models.Model):
     class OrderType(models.TextChoices):
         BLOOD_LIVER = 'BLOOD_LIVER', '간기능 혈액검사'  # LFT, CBC 등
         GENOMIC = 'GENOMIC', '유전체 분석'          # 유전자 3개 분석
+        PHYSICAL = 'PHYSICAL', '신체 계측'          # 키, 몸무게 등
+        VITAL = 'VITAL', '바이탈 측정'              # 혈압, 맥박, 체온 등
 
     class OrderStatus(models.TextChoices):
         REQUESTED = 'REQUESTED', '요청됨'
@@ -441,6 +443,9 @@ class LabOrder(models.Model):
     
     # [핵심] 이 오더가 어떤 검사인지 명시
     order_type = models.CharField(max_length=20, choices=OrderType.choices)
+    
+    # 특이사항 (JSON으로 유연하게 저장)
+    order_notes = models.JSONField(default=dict, blank=True)
     
     status = models.CharField(
         max_length=20, 
