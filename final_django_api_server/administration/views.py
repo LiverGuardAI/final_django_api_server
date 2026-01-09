@@ -545,13 +545,24 @@ class WaitingQueueView(APIView):
             }, status=status.HTTP_200_OK)
 
         # 캐시 미스: DB에서 조회 후 Redis에 저장 (state_entered_at 기준 FIFO)
-        # WAITING_CLINIC과 IN_CLINIC 모두 포함 (원무과 대기열 화면용)
-        queryset = Encounter.objects.filter(
-            workflow_state__in=[
-                Encounter.WorkflowState.WAITING_CLINIC,
-                Encounter.WorkflowState.IN_CLINIC
-            ]
-        ).select_related('patient', 'assigned_doctor').order_by('state_entered_at')
+        # 캐시 미스: DB에서 조회 후 Redis에 저장 (state_entered_at 기준 FIFO)
+        from django.db.models import Q
+        from django.utils import timezone
+        
+        # 기본 대기열 상태: 대기중, 진료중
+        filter_condition = Q(workflow_state__in=[
+            Encounter.WorkflowState.WAITING_CLINIC,
+            Encounter.WorkflowState.IN_CLINIC
+        ])
+
+        # 오늘 완료된 진료는 항상 포함 (의사 사이드바 및 원무과 대기현황용)
+        today = timezone.localdate()
+        filter_condition = filter_condition | Q(
+             workflow_state=Encounter.WorkflowState.COMPLETED,
+             updated_at__date=today
+        )
+
+        queryset = Encounter.objects.filter(filter_condition).select_related('patient', 'assigned_doctor').order_by('state_entered_at')
         
         if doctor_id:
              try:

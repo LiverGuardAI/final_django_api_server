@@ -138,6 +138,7 @@ class MedicalRecordDetailSerializer(serializers.ModelSerializer):
     record_status_display = serializers.CharField(source='get_record_status_display', read_only=True)
     questionnaire_status_display = serializers.CharField(source='get_questionnaire_status_display', read_only=True)
     diagnosis_name = serializers.CharField(source='diagnosis_type.name', read_only=True, allow_null=True)
+    questionnaire = QuestionnaireSerializer(source='encounter.questionnaire', read_only=True)
 
     class Meta:
         model = MedicalRecord
@@ -154,6 +155,19 @@ class CreateLabOrderSerializer(serializers.ModelSerializer):
     class Meta:
         model = LabOrder
         fields = ['patient', 'encounter', 'doctor', 'order_type', 'order_notes']
+
+
+
+class LabOrderSerializer(serializers.ModelSerializer):
+    """LabOrder 목록 조회 Serializer"""
+    patient_name = serializers.CharField(source='patient.name', read_only=True)
+    doctor_name = serializers.CharField(source='doctor.name', read_only=True)
+    order_type_display = serializers.CharField(source='get_order_type_display', read_only=True)
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+
+    class Meta:
+        model = LabOrder
+        fields = '__all__'
 
 
 class CreateDoctorToRadiologyOrderSerializer(serializers.ModelSerializer):

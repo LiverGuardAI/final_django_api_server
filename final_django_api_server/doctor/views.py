@@ -3,11 +3,11 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from accounts.permissions import IsDoctor
-from .models import Encounter, MedicalRecord, Patient, Doctor, LabResult, DoctorToRadiologyOrder, HCCDiagnosis
+from .models import Encounter, MedicalRecord, Patient, Doctor, LabResult, DoctorToRadiologyOrder, HCCDiagnosis, LabOrder
 from .serializers import (
     EncounterSerializer, MedicalRecordSerializer, UpdateEncounterStatusSerializer, DoctorListSerializer,
     MedicalRecordDetailSerializer, LabResultSerializer, DoctorToRadiologyOrderSerializer,
-    HCCDiagnosisSerializer, CreateLabOrderSerializer, CreateDoctorToRadiologyOrderSerializer
+    HCCDiagnosisSerializer, CreateLabOrderSerializer, CreateDoctorToRadiologyOrderSerializer, LabOrderSerializer
 )
 from datetime import date, datetime
 from django.utils import timezone
@@ -264,13 +264,35 @@ class MedicalRecordDetailView(APIView):
 
 
 class EncounterDetailView(APIView):
-    """Encounter 상세 정보 조회 API"""
-    permission_classes = [IsDoctor]
+    """
+    Encounter 상세 정보 조회 API
+    - 의사: 진료 및 처방 가능
+    - 원무과: 조회 전용 (진료비 수납 등 확인용)
+    """
+    permission_classes = [IsAuthenticated]  # 의사 + 원무과 모두 접근 허용
 
     def get(self, request, encounter_id):
         try:
             encounter = Encounter.objects.get(encounter_id=encounter_id)
-            serializer = EncounterSerializer(encounter)
+            
+            # 해당 Encounter와 연결된 MedicalRecord 조회
+            # (진료 완료된 기록을 우선 찾고, 없으면 가장 최근 기록)
+            medical_record = encounter.medical_records.filter(
+                record_status=MedicalRecord.RecordStatus.COMPLETED
+            ).last()
+            
+            if not medical_record:
+                # 완료된 기록이 없으면 작성 중인 기록이라도 조회
+                medical_record = encounter.medical_records.last()
+            
+            if medical_record:
+                # 진료 기록이 있으면 상세 정보 반환 (진단명, 오더 등 포함)
+                serializer = MedicalRecordDetailSerializer(medical_record)
+            else:
+                # 진료 기록이 아직 생성되지 않았으면 기본 Encounter 정보 반환 (대기 중 상태 등)
+                # 주의: 프론트엔드에서 필드 차이 처리 필요할 수 있음
+                serializer = EncounterSerializer(encounter)
+                
             return Response(serializer.data, status=status.HTTP_200_OK)
         except Encounter.DoesNotExist:
             return Response({'error': '해당 방문 기록을 찾을 수 없습니다.'}, status=404)
@@ -546,3 +568,25 @@ class CreateDoctorToRadiologyOrderView(APIView):
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
             return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+class PatientLabOrdersView(APIView):
+    """특정 환자의 Lab Orde 목록 조회 API"""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, patient_id):
+        try:
+            # 최근 오더 순으로 정렬
+            orders = LabOrder.objects.filter(patient_id=patient_id).order_by('-created_at')
+            
+            # 페이지네이션 등은 필요 시 추가 (지금은 전체 반환 or limit)
+            limit = request.query_params.get('limit')
+            if limit:
+                orders = orders[:int(limit)]
+                
+            serializer = LabOrderSerializer(orders, many=True)
+            return Response({
+                'count': len(serializer.data),
+                'results': serializer.data
+            }, status=status.HTTP_200_OK)
+        except Exception as e:
+            return Response({'error': str(e)}, status=500)
