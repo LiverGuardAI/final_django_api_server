@@ -692,15 +692,20 @@ class PendingOrdersView(APIView):
     def get(self, request):
         try:
             from doctor.models import LabOrder, DoctorToRadiologyOrder
+            from django.utils import timezone
+
+            today_start = timezone.localtime(timezone.now()).replace(hour=0, minute=0, second=0, microsecond=0)
             
-            # 1. Lab Orders (REQUESTED)
+            # 1. Lab Orders (REQUESTED) - 오늘 날짜 기준
             lab_orders = LabOrder.objects.filter(
-                status='REQUESTED'
+                status='REQUESTED',
+                created_at__gte=today_start
             ).select_related('patient', 'doctor', 'doctor__department').order_by('-created_at')
 
-            # 2. Imaging Orders (REQUESTED)
+            # 2. Imaging Orders (REQUESTED) - 오늘 날짜 기준
             imaging_orders = DoctorToRadiologyOrder.objects.filter(
-                status='REQUESTED'
+                status='REQUESTED',
+                ordered_at__gte=today_start
             ).select_related('patient', 'doctor', 'doctor__department').order_by('-ordered_at')
 
             results = []
@@ -711,7 +716,7 @@ class PendingOrdersView(APIView):
                     'id': f'lab_{order.order_id}',
                     'type': 'LAB',
                     'type_display': '진단검사',
-                    'order_name': order.order_name,
+                    'order_name': order.get_order_type_display(),
                     'patient_id': order.patient.patient_id,
                     'patient_name': order.patient.name,
                     'doctor_name': order.doctor.name,
@@ -727,7 +732,7 @@ class PendingOrdersView(APIView):
                     'id': f'img_{order.order_id}',
                     'type': 'IMAGING',
                     'type_display': '영상의학',
-                    'order_name': order.imaging_type_display, # 프로퍼티 사용 가정, 없으면 imaging_type
+                    'order_name': f"{order.modality} ({order.body_part or '전신'})",
                     'patient_id': order.patient.patient_id,
                     'patient_name': order.patient.name,
                     'doctor_name': order.doctor.name,
