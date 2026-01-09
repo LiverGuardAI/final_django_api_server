@@ -13,6 +13,8 @@ from .serializers import (
 from datetime import date, datetime
 from django.utils import timezone
 from django.db.models import Q
+from channels.layers import get_channel_layer
+from asgiref.sync import async_to_sync
 
 
 class DoctorDashboardView(APIView):
@@ -164,7 +166,8 @@ class UpdateEncounterStatusView(APIView):
                     if new_workflow_state in [Encounter.WorkflowState.REQUESTED, Encounter.WorkflowState.REGISTERED]:
                         encounter.status = Encounter.Status.PLANNED
                     elif new_workflow_state in [Encounter.WorkflowState.WAITING_CLINIC, Encounter.WorkflowState.IN_CLINIC,
-                                                Encounter.WorkflowState.WAITING_IMAGING, Encounter.WorkflowState.IN_IMAGING]:
+                                                Encounter.WorkflowState.WAITING_IMAGING, Encounter.WorkflowState.IN_IMAGING,
+                                                Encounter.WorkflowState.WAITING_RESULTS]:
                         encounter.status = Encounter.Status.IN_PROGRESS
                     elif new_workflow_state == Encounter.WorkflowState.COMPLETED:
                         encounter.status = Encounter.Status.COMPLETED
@@ -595,6 +598,25 @@ class CreateLabOrderView(APIView):
             serializer = CreateLabOrderSerializer(data=data)
             if serializer.is_valid():
                 serializer.save()
+            
+                # WebSocket 알림 전송 (관리자에게)
+                try:
+                    channel_layer = get_channel_layer()
+                    async_to_sync(channel_layer.group_send)(
+                        "clinic_dashboard",  # 관리자가 구독 중인 그룹
+                        {
+                            "type": "new_order",
+                            "message": f"{data.get('patient_name', '환자')}의 혈액검사 오더가 도착했습니다.",
+                            "data": {
+                                "order_type": "LAB",
+                                "patient_id": data.get('patient'),
+                                "doctor_id": data.get('doctor')
+                            }
+                        }
+                    )
+                except Exception as wse:
+                     print(f"WebSocket send failed: {wse}")
+
                 return Response({
                     'message': '오더가 성공적으로 생성되었습니다.',
                     'order': serializer.data
@@ -631,6 +653,25 @@ class CreateDoctorToRadiologyOrderView(APIView):
             serializer = CreateDoctorToRadiologyOrderSerializer(data=data)
             if serializer.is_valid():
                 serializer.save()
+
+                # WebSocket 알림 전송 (관리자에게)
+                try:
+                    channel_layer = get_channel_layer()
+                    async_to_sync(channel_layer.group_send)(
+                        "clinic_dashboard",
+                        {
+                            "type": "new_order",
+                            "message": f"{data.get('patient_name', '환자')}의 영상검사 오더가 도착했습니다.",
+                            "data": {
+                                "order_type": "IMAGING",
+                                "patient_id": data.get('patient'),
+                                "doctor_id": data.get('doctor')
+                            }
+                        }
+                    )
+                except Exception as wse:
+                     print(f"WebSocket send failed: {wse}")
+
                 return Response({
                     'message': '영상 검사 오더가 성공적으로 생성되었습니다.',
                     'order': serializer.data

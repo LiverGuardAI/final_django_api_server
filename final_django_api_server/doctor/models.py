@@ -124,6 +124,7 @@ class Encounter(models.Model):
         REGISTERED = 'REGISTERED', '접수완료'
         WAITING_CLINIC = 'WAITING_CLINIC', '진료대기'
         IN_CLINIC = 'IN_CLINIC', '진료중'
+        WAITING_RESULTS = 'WAITING_RESULTS', '결과대기'
         WAITING_IMAGING = 'WAITING_IMAGING', '촬영대기'
         IN_IMAGING = 'IN_IMAGING', '촬영중'
         COMPLETED = 'COMPLETED', '완료'
@@ -213,8 +214,6 @@ class MedicalRecord(models.Model):
     clinical_notes = models.TextField(blank=True, null=True)
     lab_recorded = models.BooleanField(default=False)
     ct_recorded = models.BooleanField(default=False)
-
-    # 문진표 관리 필드 제거됨 (Questionnaire 모델로 이동)
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
