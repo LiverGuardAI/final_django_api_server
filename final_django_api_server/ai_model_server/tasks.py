@@ -129,3 +129,42 @@ def process_feature_extraction(self, series_instance_uid):
             'error': str(e),
             'message': 'Feature extraction failed'
         }
+
+
+ # BentoML 예측 호출을 **비동기(Celery)**로 처리
+@shared_task(bind=True, name='ai_model_server.process_prediction', max_retries=0)
+def process_prediction(self, task_type, payload):
+    """
+    BentoML 서버를 호출하여 예측(Stage, Relapse, Survival 등)을 수행하는 비동기 태스크
+    """
+    from django.conf import settings
+    
+    endpoints = {
+        'stage': '/predict_stage',
+        'relapse': '/predict_relapse',
+        'survival': '/predict_survival',
+        'all': '/predict_all'
+    }
+    
+    endpoint = f"{settings.BENTOML_SERVER_URL}{endpoints.get(task_type, '')}"
+    
+    try:
+        self.update_state(state='PROGRESS', meta={'step': f'AI {task_type} prediction started', 'progress': 20})
+        
+        response = requests.post(endpoint, json=payload, timeout=60)
+        response.raise_for_status()
+        result = response.json()
+        
+        self.update_state(state='PROGRESS', meta={'step': 'AI prediction completed', 'progress': 90})
+        
+        return {
+            'status': 'success',
+            'task_type': task_type,
+            'result': result
+        }
+    except Exception as e:
+        return {
+            'status': 'failed',
+            'error': str(e),
+            'message': f'Prediction for {task_type} failed'
+        }

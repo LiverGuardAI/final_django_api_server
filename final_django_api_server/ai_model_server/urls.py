@@ -1,5 +1,5 @@
 from django.urls import path
-from .views import CreateSegmentationMaskView, SegmentationTaskStatusView, CreateFeatureExtractionView, FeatureExtractionTaskStatusView
+from .views import CreateSegmentationMaskView, SegmentationTaskStatusView, CreateFeatureExtractionView, FeatureExtractionTaskStatusView, AITaskStatusView
 
 from .views import (BentoMLHealthView, GetFeatureInfoView, PredictStageView, PredictRelapseView, PredictSurvivalView, PredictAllView,
                     PatientRadioFeatureListView, PatientClinicalFeatureListView, PatientGenomicFeatureListView, BuildClinicalVectorView, PredictByIdsView, PredictFromPatientView,
@@ -34,4 +34,5 @@ urlpatterns = [
     # 결과 저장/조회
     path('analysis/save/', SaveAnalysisResultView.as_view(), name='analysis-save'),
     path('patients/<uuid:patient_id>/analysis-history/', PatientAnalysisHistoryView.as_view(), name='analysis-history'),
+    path('task-status/<str:task_id>/', AITaskStatusView.as_view(), name='ai_task_status'),
 ]

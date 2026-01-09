@@ -2,19 +2,18 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status, generics
 from rest_framework.permissions import AllowAny
-from .tasks import process_segmentation, process_feature_extraction
+from .tasks import process_segmentation, process_feature_extraction, process_prediction
 
 from datetime import datetime
 from rest_framework import generics
 from .models import RadioFeatureVector, ClinicalFeatureVector, AIAnalysisResult
 from .serializers import RadioFeatureSerializer, ClinicalFeatureSerializer, GenomicFeatureSerializer, AIAnalysisResultSerializer
 from .feature_mapping import create_clinical_feature_vector_from_dict, validate_clinical_vector, MODEL_CLINICAL_FEATURES
-from doctor.models import GenomicData
+from doctor.models import GenomicData, Patient, HccDiagnosis, LabResults
 
 import requests
 from django.conf import settings
 from typing import Dict, Any
-
 
 class CreateSegmentationMaskView(APIView):
     """
@@ -212,168 +211,165 @@ N_CLINICAL = 9
 N_MRNA = 20
 N_CT = 512
 
-class BentoMLHealthView(APIView):
-    """BentoML 서비스 상태 확인"""
-    permission_classes = [AllowAny]
+# class BentoMLHealthView(APIView):
+#     """BentoML 서비스 상태 확인"""
+#     permission_classes = [AllowAny]
     
-    def get(self, request):
-        try:
-            url = f"{settings.BENTOML_SERVER_URL}/health"
-            resp = requests.post(url, json={}, timeout=10)
-            return Response(resp.json(), status=resp.status_code)
-        except Exception as e:
-            return Response(
-                {"status": "error", "message": str(e)},
-                status=status.HTTP_503_SERVICE_UNAVAILABLE
-            )
+#     def get(self, request):
+#         try:
+#             url = f"{settings.BENTOML_SERVER_URL}/health"
+#             resp = requests.post(url, json={}, timeout=10)
+#             return Response(resp.json(), status=resp.status_code)
+#         except Exception as e:
+#             return Response(
+#                 {"status": "error", "message": str(e)},
+#                 status=status.HTTP_503_SERVICE_UNAVAILABLE
+#             )
 
 
-class GetFeatureInfoView(APIView):
-    """Feature 정보 조회"""
-    permission_classes = [AllowAny]
+# class GetFeatureInfoView(APIView):
+#     """Feature 정보 조회"""
+#     permission_classes = [AllowAny]
     
-    def get(self, request):
-        try:
-            url = f"{settings.BENTOML_SERVER_URL}/get_feature_info"
-            resp = requests.post(url, json={}, timeout=10)
-            return Response(resp.json(), status=resp.status_code)
-        except Exception as e:
-            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+#     def get(self, request):
+#         try:
+#             url = f"{settings.BENTOML_SERVER_URL}/get_feature_info"
+#             resp = requests.post(url, json={}, timeout=10)
+#             return Response(resp.json(), status=resp.status_code)
+#         except Exception as e:
+#             return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class AITaskStatusView(APIView):
+    """모든 Celery 태스크의 상태를 조회하는 공통 API"""
+    permission_classes = [AllowAny]
+    def get(self, request, task_id):
+        from celery.result import AsyncResult
+        task_result = AsyncResult(task_id)
+        
+        response_data = {
+            "task_id": task_id,
+            "status": task_result.status, # PENDING, PROGRESS, SUCCESS, FAILURE
+        }
+        
+        if task_result.status == 'PROGRESS':
+            response_data["progress"] = task_result.info
+        elif task_result.status == 'SUCCESS':
+            response_data["result"] = task_result.get()
+        elif task_result.status == 'FAILURE':
+            response_data["error"] = str(task_result.info)
+            
+        return Response(response_data)
 
 
 class PredictStageView(APIView):
-    """
-    Task 1: 병기 예측
-    
-    POST /api/predict/stage/
-    Body: {"clinical": [9개], "ct": [512개]}
-    """
+    """Task 1: 병기 예측 (비동기)"""
     permission_classes = [AllowAny]
-    
     def post(self, request):
-        try:
-            clinical = request.data.get('clinical', [])
-            ct = request.data.get('ct', [])
-            
-            if len(clinical) != N_CLINICAL:
-                return Response(
-                    {"error": f"clinical must have {N_CLINICAL} features (selected), got {len(clinical)}"},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-            if len(ct) != N_CT:
-                return Response(
-                    {"error": f"ct must have {N_CT} features, got {len(ct)}"},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-            
-            url = f"{settings.BENTOML_SERVER_URL}/predict_stage"
-            resp = requests.post(url, json={"clinical": clinical, "ct": ct}, timeout=30)
-            return Response(resp.json(), status=resp.status_code)
-            
-        except Exception as e:
-            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-
+        clinical = request.data.get('clinical', [])
+        ct = request.data.get('ct', [])
+        
+        if len(clinical) != N_CLINICAL or len(ct) != N_CT:
+            return Response({"error": "Invalid input dimensions"}, status=400)
+        
+        task = process_prediction.delay('stage', {"clinical": clinical, "ct": ct})
+        return Response({"task_id": task.id, "status": "pending"}, status=202)
+    
+    
 class PredictRelapseView(APIView):
-    """
-    Task 2: 조기 재발 예측
-    
-    POST /api/predict/relapse/
-    Body: {"clinical": [9개], "mrna": [20개], "ct": [512개]}
-    """
+    """Task 2: 조기 재발 예측 (비동기)"""
     permission_classes = [AllowAny]
-    
     def post(self, request):
-        try:
-            clinical = request.data.get('clinical', [])
-            mrna = request.data.get('mrna', [])
-            ct = request.data.get('ct', [])
-            
-            if len(clinical) != N_CLINICAL:
-                return Response(
-                    {"error": f"clinical must have {N_CLINICAL} features (selected)"},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-            if len(mrna) != N_MRNA:
-                return Response(
-                    {"error": f"mrna must have {N_MRNA} features (selected)"},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-            if len(ct) != N_CT:
-                return Response(
-                    {"error": f"ct must have {N_CT} features"},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-            
-            url = f"{settings.BENTOML_SERVER_URL}/predict_relapse"
-            resp = requests.post(url, json={"clinical": clinical, "mrna": mrna, "ct": ct}, timeout=30)
-            return Response(resp.json(), status=resp.status_code)
-            
-        except Exception as e:
-            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-
+        clinical = request.data.get('clinical', [])
+        mrna = request.data.get('mrna', [])
+        ct = request.data.get('ct', [])
+        
+        if len(clinical) != N_CLINICAL or len(mrna) != N_MRNA or len(ct) != N_CT:
+            return Response({"error": "Invalid input dimensions"}, status=400)
+        
+        task = process_prediction.delay('relapse', {"clinical": clinical, "mrna": mrna, "ct": ct})
+        return Response({"task_id": task.id, "status": "pending"}, status=202)
+    
+    
 class PredictSurvivalView(APIView):
-    """
-    Task 3: 생존 분석
-    
-    POST /api/predict/survival/
-    Body: {"clinical": [9개], "mrna": [20개], "ct": [512개]}
-    """
+    """Task 3: 생존 분석 (비동기)"""
     permission_classes = [AllowAny]
-    
     def post(self, request):
-        try:
-            clinical = request.data.get('clinical', [])
-            mrna = request.data.get('mrna', [])
-            ct = request.data.get('ct', [])
+        clinical = request.data.get('clinical', [])
+        mrna = request.data.get('mrna', [])
+        ct = request.data.get('ct', [])
+        
+        if len(clinical) != N_CLINICAL or len(mrna) != N_MRNA or len(ct) != N_CT:
+            return Response({"error": "Invalid input dimensions"}, status=400)
             
-            if len(clinical) != N_CLINICAL:
-                return Response({"error": f"clinical must have {N_CLINICAL} features"}, status=400)
-            if len(mrna) != N_MRNA:
-                return Response({"error": f"mrna must have {N_MRNA} features"}, status=400)
-            if len(ct) != N_CT:
-                return Response({"error": f"ct must have {N_CT} features"}, status=400)
-            
-            url = f"{settings.BENTOML_SERVER_URL}/predict_survival"
-            resp = requests.post(url, json={"clinical": clinical, "mrna": mrna, "ct": ct}, timeout=30)
-            return Response(resp.json(), status=resp.status_code)
-            
-        except Exception as e:
-            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
+        task = process_prediction.delay('survival', {"clinical": clinical, "mrna": mrna, "ct": ct})
+        return Response({"task_id": task.id, "status": "pending"}, status=202)
+    
 
 class PredictAllView(APIView):
-    """
-    전체 예측 (Task 1, 2, 3)
-    
-    POST /api/predict/all/
-    Body: {"clinical": [9개], "mrna": [20개], "ct": [512개]}
-    """
+    """전체 예측 (비동기)"""
     permission_classes = [AllowAny]
-    
     def post(self, request):
+        clinical = request.data.get('clinical', [])
+        mrna = request.data.get('mrna', [])
+        ct = request.data.get('ct', [])
+        
+        task = process_prediction.delay('all', {"clinical": clinical, "mrna": mrna, "ct": ct})
+        return Response({"task_id": task.id, "status": "pending"}, status=202)
+
+# ============================================================
+# DB-Linked Advanced Predictions (비동기 방식)
+# ============================================================
+class PredictByIdsView(APIView):
+    """ID 기반 예측 (비동기)"""
+    permission_classes = [AllowAny]
+    def post(self, request):
+        radio_id = request.data.get('radio_vector_id')
+        clinical_id = request.data.get('clinical_vector_id')
+        genomic_id = request.data.get('genomic_id')
+        
         try:
-            clinical = request.data.get('clinical', [])
-            mrna = request.data.get('mrna', [])
-            ct = request.data.get('ct', [])
+            radio = RadioFeatureVector.objects.get(radio_vector_id=radio_id)
+            clinical = ClinicalFeatureVector.objects.get(clinical_vector_id=clinical_id)
+            mrna_vector = GenomicData.objects.get(genomic_id=genomic_id).pathway_scores if genomic_id else None
             
-            # 입력 검증
-            if len(clinical) != N_CLINICAL:
-                return Response({"error": f"clinical must have {N_CLINICAL} features"}, status=400)
-            if len(mrna) != N_MRNA:
-                return Response({"error": f"mrna must have {N_MRNA} features"}, status=400)
-            if len(ct) != N_CT:
-                return Response({"error": f"ct must have {N_CT} features"}, status=400)
-            
-            url = f"{settings.BENTOML_SERVER_URL}/predict_all"
-            resp = requests.post(url, json={"clinical": clinical, "mrna": mrna, "ct": ct}, timeout=60)
-            return Response(resp.json(), status=resp.status_code)
-            
+            payload = {
+                "clinical": clinical.feature_vector,
+                "ct_features": radio.feature_vector,
+                "mrna": mrna_vector,
+                "use_mrna": bool(genomic_id)
+            }
+            task = process_prediction.delay('all', payload)
+            return Response({"task_id": task.id, "status": "pending"}, status=202)
         except Exception as e:
-            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-
+            return Response({"error": str(e)}, status=400)
+class PredictFromPatientView(APIView):
+    """환자 ID 기반 자동 예측 (비동기)"""
+    permission_classes = [AllowAny]
+    def post(self, request):
+        patient_id = request.data.get('patient_id')
+        radio_vector_id = request.data.get('radio_vector_id')
+        
+        try:
+            radio = RadioFeatureVector.objects.get(radio_vector_id=radio_vector_id)
+            clinical_result = build_clinical_vector_from_db(patient_id, request.data.get('lab_id'), request.data.get('hcc_id'))
+            if "error" in clinical_result:
+                return Response(clinical_result, status=400)
+            
+            genomic_id = request.data.get('genomic_id')
+            mrna_vector = GenomicData.objects.get(genomic_id=genomic_id).pathway_scores if genomic_id else None
+            
+            payload = {
+                "clinical": clinical_result['vector'],
+                "ct_features": radio.feature_vector,
+                "mrna": mrna_vector,
+                "use_mrna": bool(genomic_id)
+            }
+            task = process_prediction.delay('all', payload)
+            return Response({"task_id": task.id, "status": "pending"}, status=202)
+        except Exception as e:
+            return Response({"error": str(e)}, status=500)
+        
 # ============================================================
 # Validation Helpers
 # ============================================================
@@ -509,26 +505,16 @@ class PatientRadioFeatureListView(generics.ListAPIView):
     """환자별 CT 특징 벡터 목록"""
     serializer_class = RadioFeatureSerializer
     permission_classes = [AllowAny]
-    
     def get_queryset(self):
-        patient_id = self.kwargs['patient_id']
-        # series → study → patient 관계를 통해 필터링
-        return RadioFeatureVector.objects.filter(
-            series__study__patient_id=patient_id
-        ).select_related('series', 'series__study').order_by('-created_at')
+        return RadioFeatureVector.objects.filter(series__study__patient_id=self.kwargs['patient_id']).order_by('-created_at')
 
 
 class PatientClinicalFeatureListView(generics.ListAPIView):
     """환자별 임상 특징 벡터 목록"""
     serializer_class = ClinicalFeatureSerializer
     permission_classes = [AllowAny]
-    
     def get_queryset(self):
-        patient_id = self.kwargs['patient_id']
-        # encounter를 통해 patient 필터링
-        return ClinicalFeatureVector.objects.filter(
-            encounter__patient_id=patient_id
-        ).select_related('encounter').order_by('-created_at')
+        return ClinicalFeatureVector.objects.filter(encounter__patient_id=self.kwargs['patient_id']).order_by('-created_at')
 
 
 class PatientGenomicFeatureListView(generics.ListAPIView):
@@ -760,7 +746,6 @@ class PredictFromPatientView(APIView):
 class SaveAnalysisResultView(APIView):
     """AI 분석 결과 저장"""
     permission_classes = [AllowAny]
-    
     def post(self, request):
         try:
             result = AIAnalysisResult.objects.create(
@@ -768,33 +753,15 @@ class SaveAnalysisResultView(APIView):
                 imaging_vector_id=request.data.get('radio_vector_id'),
                 clinical_vector_id=request.data.get('clinical_vector_id'),
                 genomic_id=request.data.get('genomic_vector_id'),
-                prediction_results={
-                    'stage': request.data.get('stage_prediction', {}),
-                    'relapse': request.data.get('relapse_prediction', {}),
-                    'survival': request.data.get('survival_prediction', {})
-                },
-                risk_score=request.data.get('survival_prediction', {}).get('risk_score'),
-                risk_group=request.data.get('survival_prediction', {}).get('risk_group'),
-                model_version=request.data.get('model_version', 'v11.6'),
+                prediction_results=request.data.get('prediction_results', {}),
                 status='completed',
                 completed_at=datetime.now()
             )
-            
-            return Response(
-                {"result_id": str(result.result_id), "message": "Saved successfully"},
-                status=status.HTTP_201_CREATED
-            )
-        except KeyError as e:
-            return Response({"error": f"Missing field: {e}"}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"result_id": str(result.result_id), "message": "Saved successfully"}, status=201)
         except Exception as e:
-            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
-
-
+            return Response({"error": str(e)}, status=400)
 class PatientAnalysisHistoryView(generics.ListAPIView):
-    """환자별 AI 분석 이력"""
     serializer_class = AIAnalysisResultSerializer
     permission_classes = [AllowAny]
-    
     def get_queryset(self):
-        patient_id = self.kwargs['patient_id']
-        return AIAnalysisResult.objects.filter(patient_id=patient_id).order_by('-created_at')
+        return AIAnalysisResult.objects.filter(patient_id=self.kwargs['patient_id']).order_by('-created_at')
