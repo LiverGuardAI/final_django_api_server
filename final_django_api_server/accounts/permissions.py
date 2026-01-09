@@ -6,32 +6,37 @@ class IsDoctor(BasePermission):
 
     def has_permission(self, request, view):
         print(f"DEBUG: Checking permission for user {request.user}, role {getattr(request.user, 'role', 'None')}, authenticated: {request.user.is_authenticated}")
-        return request.user.is_authenticated and (request.user.role == 'DOCTOR')
+        role = (getattr(request.user, 'role', '') or '').upper()
+        return request.user.is_authenticated and role == 'DOCTOR'
 
 
 class IsRadiologist(BasePermission):
     """영상의학과(Radiologist)만 접근 가능"""
 
     def has_permission(self, request, view):
-        return request.user.is_authenticated and request.user.role == 'RADIOLOGIST'
+        role = (getattr(request.user, 'role', '') or '').upper()
+        return request.user.is_authenticated and role == 'RADIOLOGIST'
 
 
 class IsClerk(BasePermission):
     """원무과(Clerk)만 접근 가능"""
 
     def has_permission(self, request, view):
-        return request.user.is_authenticated and request.user.role == 'CLERK'
+        role = (getattr(request.user, 'role', '') or '').upper()
+        return request.user.is_authenticated and role == 'CLERK'
 
 
 class IsPatient(BasePermission):
     """환자(Patient)만 접근 가능"""
 
     def has_permission(self, request, view):
-        return request.user.is_authenticated and request.user.role == 'PATIENT'
+        role = (getattr(request.user, 'role', '') or '').upper()
+        return request.user.is_authenticated and role == 'PATIENT'
 
 
 class IsDoctorOrRadiologist(BasePermission):
     """의사 또는 영상의학과만 접근 가능"""
 
     def has_permission(self, request, view):
-        return request.user.is_authenticated and request.user.role in ['DOCTOR', 'RADIOLOGIST']
+        role = (getattr(request.user, 'role', '') or '').upper()
+        return request.user.is_authenticated and role in ['DOCTOR', 'RADIOLOGIST']
