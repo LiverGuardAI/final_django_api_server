@@ -90,6 +90,7 @@ class RadiologyAIRun(models.Model):
     started_at = models.DateTimeField(blank=True, null=True)
     finished_at = models.DateTimeField(blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
+    mask_series_uid = models.CharField(max_length=64, blank=True, null=True)
 
     series = models.ForeignKey(DICOMSeries, on_delete=models.CASCADE, to_field='series_uid', db_column='series_uid')
     
