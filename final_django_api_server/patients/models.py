@@ -16,7 +16,8 @@ class UserProfile(models.Model):
     gender = GenderField(choices=Gender.choices, blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-    user_id = models.BigIntegerField()
+    user_id = models.BigIntegerField(unique=True)  # 중복 방지
+    password = models.CharField(max_length=128)
     linked_patient_id = models.CharField(max_length=50, blank=True, null=True)
     is_verified = models.BooleanField(default=False)
     
