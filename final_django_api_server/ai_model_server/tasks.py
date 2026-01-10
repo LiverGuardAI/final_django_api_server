@@ -34,6 +34,7 @@ def process_segmentation(self, series_id):
     # Mosec API endpoint
     mosec_url = os.getenv('MOSEC_BASE_URL', 'http://host.docker.internal:8001')
     endpoint = f'{mosec_url}/ai/mosec/nnU-Net-Seg'
+    USE_CLOUDFLARE_MOSEC = os.getenv("USE_CLOUDFLARE_MOSEC", "0") == "1"
 
     try:
         # Update task state to PROGRESS
@@ -46,11 +47,19 @@ def process_segmentation(self, series_id):
             }
         )
 
+        headers = {
+            "Content-Type": "application/json",
+        }
+        
+        if USE_CLOUDFLARE_MOSEC:
+            headers["CF-Access-Client-Id"] = os.environ["CF_ACCESS_CLIENT_ID"]
+            headers["CF-Access-Client-Secret"] = os.environ["CF_ACCESS_CLIENT_SECRET"]
+            
         # Send request to Mosec server
         response = requests.post(
             endpoint,
             json={'series_id': series_id},
-            headers={'Content-Type': 'application/json'},
+            headers=headers,
             timeout=3600  # 1 hour timeout for AI processing
         )
 
@@ -130,6 +139,7 @@ def process_feature_extraction(self, series_instance_uid):
     """
     mosec_url = os.getenv('MOSEC_FEATURE_BASE_URL', 'http://host.docker.internal:8002')
     endpoint = f'{mosec_url}/inference'
+    USE_CLOUDFLARE_MOSEC = os.getenv("USE_CLOUDFLARE_MOSEC", "0") == "1"
 
     try:
         self.update_state(
@@ -140,12 +150,21 @@ def process_feature_extraction(self, series_instance_uid):
                 'progress': 10
             }
         )
+        
+        headers = {
+            "Content-Type": "application/json",
+        }
+        
+        if USE_CLOUDFLARE_MOSEC:
+            headers["CF-Access-Client-Id"] = os.environ["CF_ACCESS_CLIENT_ID"]
+            headers["CF-Access-Client-Secret"] = os.environ["CF_ACCESS_CLIENT_SECRET"]
+            
 
         packed_data = msgpack.packb({'seriesinstanceuid': series_instance_uid}, use_bin_type=True)
         response = requests.post(
             endpoint,
             data=packed_data,
-            headers={'Content-Type': 'application/msgpack'},
+            headers=headers,
             timeout=7200
         )
         response.raise_for_status()
