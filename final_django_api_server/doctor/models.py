@@ -286,7 +286,13 @@ class VitalData(models.Model):
     sbp = models.IntegerField(blank=True, null=True)
     dbp = models.IntegerField(blank=True, null=True)
     patient = models.ForeignKey(Patient, on_delete=models.CASCADE, db_column='patient_id')
-    medical_record = models.ForeignKey(MedicalRecord, on_delete=models.CASCADE, db_column='record_id')
+    medical_record = models.ForeignKey(
+        MedicalRecord,
+        on_delete=models.CASCADE,
+        db_column='record_id',
+        null=True,
+        blank=True
+    )
 
     class Meta:
         db_table = 'hospital"."vital_data'
