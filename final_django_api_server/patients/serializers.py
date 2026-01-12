@@ -1,6 +1,6 @@
 # patients/serializers.py
 from rest_framework import serializers
-from .models import UserProfile
+from .models import UserProfile, AppSyncRequest
 from django.contrib.auth.hashers import make_password
 
 
@@ -48,3 +48,37 @@ class LoginSerializer(serializers.Serializer):
     """로그인용 Serializer"""
     user_id = serializers.CharField(required=True)
     password = serializers.CharField(required=True, write_only=True)
+
+
+class AppSyncRequestSerializer(serializers.ModelSerializer):
+    """앱 연동 신청 Serializer"""
+    profile_nickname = serializers.CharField(source='profile.nickname', read_only=True)
+    profile_phone_number = serializers.CharField(source='profile.phone_number', read_only=True)
+    profile_birth_date = serializers.DateField(source='profile.birth_date', read_only=True)
+    profile_gender = serializers.CharField(source='profile.gender', read_only=True)
+    processed_by_name = serializers.CharField(source='processed_by.admin_name', read_only=True)
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+
+    class Meta:
+        model = AppSyncRequest
+        fields = [
+            'request_id',
+            'status',
+            'status_display',
+            'requested_at',
+            'processed_at',
+            'processed_by',
+            'processed_by_name',
+            'profile',
+            'profile_nickname',
+            'profile_phone_number',
+            'profile_birth_date',
+            'profile_gender',
+            'assigned_patient_id',
+        ]
+        read_only_fields = [
+            'request_id',
+            'requested_at',
+            'processed_at',
+            'processed_by',
+        ]

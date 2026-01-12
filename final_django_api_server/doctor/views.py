@@ -3,17 +3,18 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from accounts.permissions import IsDoctor
-from .models import Encounter, MedicalRecord, Patient, Doctor, LabResult, DoctorToRadiologyOrder, HCCDiagnosis, GenomicData, LabOrder
+from .models import Encounter, MedicalRecord, Patient, Doctor, LabResult, DoctorToRadiologyOrder, HCCDiagnosis, GenomicData, LabOrder, AnthropometricData
 from radiology.models import DICOMStudy, DICOMSeries
 from .serializers import (
     EncounterSerializer, MedicalRecordSerializer, UpdateEncounterStatusSerializer, DoctorListSerializer,
     MedicalRecordDetailSerializer, LabResultSerializer, DoctorToRadiologyOrderSerializer,
-    HCCDiagnosisSerializer, CreateLabOrderSerializer, CreateDoctorToRadiologyOrderSerializer, LabOrderSerializer
+    HCCDiagnosisSerializer, GenomicDataSerializer, CreateLabOrderSerializer,
+    CreateDoctorToRadiologyOrderSerializer, LabOrderSerializer
 )
 from administration.serializers import PatientSerializer
 from datetime import date, datetime
 from django.utils import timezone
-from django.db.models import Q
+from django.db.models import Q, F
 from channels.layers import get_channel_layer
 from asgiref.sync import async_to_sync
 from administration.cache_manager import cache_manager
@@ -381,6 +382,39 @@ class PatientLabResultsView(APIView):
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
+class PatientProfileView(APIView):
+    """특정 환자의 기본 정보 + 최신 신체계측"""
+    permission_classes = [IsDoctor]
+
+    def get(self, request, patient_id):
+        try:
+            patient = Patient.objects.get(patient_id=patient_id)
+            latest_anthro = (
+                AnthropometricData.objects.filter(patient_id=patient_id)
+                .order_by(F('measured_at').desc(nulls_last=True), '-anthro_id')
+                .first()
+            )
+
+            return Response({
+                'patient_id': patient.patient_id,
+                'name': patient.name,
+                'age': patient.age,
+                'gender': patient.gender,
+                'height': latest_anthro.height if latest_anthro else None,
+                'weight': latest_anthro.weight if latest_anthro else None,
+                'measured_at': latest_anthro.measured_at if latest_anthro else None,
+            }, status=status.HTTP_200_OK)
+
+        except Patient.DoesNotExist:
+            return Response({
+                'error': 'Patient not found'
+            }, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            return Response({
+                'error': str(e)
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
 
 class PatientDoctorToRadiologyOrdersView(APIView):
     """특정 환자의 영상 검사 오더 목록 조회 API (의사 -> 영상의학과)"""
@@ -423,7 +457,7 @@ class PatientHCCDiagnosisView(APIView):
         try:
             hcc_diagnoses = HCCDiagnosis.objects.filter(
                 patient_id=patient_id
-            ).order_by('-hcc_diagnosis_date')
+            ).order_by(F('measured_at').desc(nulls_last=True), '-hcc_diagnosis_date', '-hcc_id')
 
             serializer = HCCDiagnosisSerializer(hcc_diagnoses, many=True)
             return Response({
@@ -451,15 +485,9 @@ class PatientGenomicDataView(APIView):
             if limit:
                 genomic_qs = genomic_qs[:int(limit)]
 
-            results = list(genomic_qs.values(
-                'genomic_id',
-                'sample_date',
-                'created_at',
-            ))
-
             return Response({
                 'count': genomic_qs.count(),
-                'results': results
+                'results': GenomicDataSerializer(genomic_qs, many=True).data
             }, status=status.HTTP_200_OK)
 
         except Exception as e:
@@ -491,6 +519,12 @@ class PatientCTSeriesView(APIView):
                     'series_number',
                     'modality',
                     'study__study_datetime',
+                    'study__body_part',
+                    'acquisition_datetime',
+                    'image_count',
+                    'slice_thickness',
+                    'pixel_spacing',
+                    'protocol_name',
                 )
                 .order_by('study_id', 'series_number', 'series_uid')
             )
