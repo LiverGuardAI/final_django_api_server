@@ -106,16 +106,15 @@ class PatientListView(APIView):
         patients = Patient.objects.all()
 
         if search:
-            patients = patients.filter(
-                Q(patient_id__icontains=search) |
-                Q(name__icontains=search)
-            )
+            # 커스텀 매니저 사용
+            patients = patients.search_patient(search).order_by('-similarity', '-created_at')
+        else:
+            patients = patients.order_by('-created_at')
 
-        # 총 개수 먼저 계산
+        # 총 개수 계산
         total_count = patients.count()
 
-        # 정렬 및 페이지네이션
-        patients = patients.order_by('-created_at')
+        # 페이지네이션 처리
         start = (page - 1) * page_size
         end = start + page_size
         patients = patients[start:end]
@@ -571,6 +570,55 @@ class WaitingQueueView(APIView):
         }, status=status.HTTP_200_OK)
 
 
+class AdministrationWaitingQueueView(APIView):
+    """원무과 전용 대기열 조회 API (진료 / 영상 별도 조회)"""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        view_type = request.query_params.get('type', 'clinic') # clinic | imaging
+        
+        from django.db.models import Q
+        from django.utils import timezone
+        
+        today = timezone.localdate()
+        
+        if view_type == 'clinic':
+             # 진료 대기 현황: 진료대기, 진료중, 진료완료(오늘)
+            filter_condition = Q(workflow_state__in=[
+                Encounter.WorkflowState.WAITING_CLINIC,
+                Encounter.WorkflowState.IN_CLINIC,
+                Encounter.WorkflowState.WAITING_RESULTS, # 결과 대기도 진료의 연장선
+            ]) | Q(
+                workflow_state=Encounter.WorkflowState.COMPLETED,
+                updated_at__date=today
+            )
+        elif view_type == 'imaging':
+             # 영상 대기 현황: 촬영대기, 촬영중
+            filter_condition = Q(workflow_state__in=[
+                Encounter.WorkflowState.WAITING_IMAGING,
+                Encounter.WorkflowState.IN_IMAGING,
+            ])
+            # 영상은 Encounter 상태만으로는 '완료'를 구분하기 어려울 수 있으나(검사완료 후 다시 진료대기로 가므로),
+            # 일단 대기/진행만 보여줌
+        else:
+            return Response({'error': 'Invalid view type'}, status=status.HTTP_400_BAD_REQUEST)
+
+        queryset = Encounter.objects.filter(filter_condition).select_related('patient', 'assigned_doctor').order_by('state_entered_at')
+        
+        serializer = EncounterSerializer(queryset, many=True)
+
+        # 통계 정보 (원무과용이라도 전체 대기 수는 보여주는 게 좋음)
+        from .cache_manager import cache_manager
+        
+        return Response({
+            'success': True,
+            'stats': {
+                'waiting': cache_manager.get_waiting_count('clinic'),
+            },
+            'queue': serializer.data
+        }, status=status.HTTP_200_OK)
+
+
 class CallNextPatientView(APIView):
     """다음 환자 호출 API"""
     permission_classes = [IsAuthenticated]
@@ -683,6 +731,12 @@ class PendingOrdersView(APIView):
                 status='REQUESTED'
             ).select_related('patient', 'doctor', 'doctor__department').order_by('-ordered_at')
 
+            # 3. Radiology To Doctor Orders (REQUESTED) - 영상의학과 -> 의사 역오더 (원무과 확인 후 의사 배정)
+            from radiology.models import RadiologyToDoctorOrder
+            radiology_requests = RadiologyToDoctorOrder.objects.filter(
+                status='REQUESTED'
+            ).select_related('patient', 'doctor', 'radiologist').order_by('-created_at')
+
             results = []
 
             # Lab Order 변환
@@ -710,7 +764,7 @@ class PendingOrdersView(APIView):
                     'type': 'IMAGING',
                     'type_display': '영상의학',
                     'order_name': f"{order.modality} ({order.body_part or '전신'})",
-                    'order_type': 'IMAGING',  # 추가: 일관성을 위해
+                    'order_type': 'IMAGING',  
                     'patient_id': order.patient.patient_id,
                     'patient_name': order.patient.name,
                     'doctor_name': order.doctor.name,
@@ -718,10 +772,100 @@ class PendingOrdersView(APIView):
                     'created_at': order.ordered_at,
                     'status': order.status,
                     'status_display': '촬영대기',
-                    'encounter_id': order.encounter.encounter_id if order.encounter else None  # 추가: encounter_id
+                    'encounter_id': order.encounter.encounter_id if order.encounter else None
+                })
+
+            # Radiology Request 변환 (영상의학과 -> 의사)
+            for order in radiology_requests:
+                results.append({
+                    'id': f'rd_{order.rd_order_id}',
+                    'type': 'RADIOLOGY_REQUEST',
+                    'type_display': '영상과 요청',
+                    'order_name': order.message or '추가 처방 요청',
+                    'order_type': 'RADIOLOGY',
+                    'patient_id': order.patient.patient_id,
+                    'patient_name': order.patient.name,
+                    'doctor_name': order.doctor.name,
+                    'department_name': '영상의학과', # 요청 부서
+                    'created_at': order.created_at,
+                    'status': order.status,
+                    'status_display': '확인대기',
+                    'encounter_id': order.encounter.encounter_id if order.encounter else None
                 })
 
             # 최신순 정렬 (created_at 기준)
+            results.sort(key=lambda x: x['created_at'], reverse=True)
+
+            return Response({
+                'count': len(results),
+                'results': results
+            }, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class InProgressOrdersView(APIView):
+    """
+    진행 중인 검사 목록 조회 API ("검사 대기" 탭용)
+    - LabOrder (IN_PROGRESS) - 혈액검사/유전체검사 등 며칠 걸리는 검사
+    - DoctorToRadiologyOrder (WAITING, IN_PROGRESS) - 촬영 대기 중
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        try:
+            from doctor.models import LabOrder, DoctorToRadiologyOrder
+
+            # 1. Lab Orders (IN_PROGRESS) - 검사 진행 중
+            lab_orders = LabOrder.objects.filter(
+                status='IN_PROGRESS'
+            ).select_related('patient', 'doctor', 'doctor__department').order_by('-created_at')
+
+            # 2. Imaging Orders (WAITING, IN_PROGRESS) - 촬영 대기/진행 중
+            imaging_orders = DoctorToRadiologyOrder.objects.filter(
+                status__in=['WAITING', 'IN_PROGRESS']
+            ).select_related('patient', 'doctor', 'doctor__department').order_by('-ordered_at')
+
+            results = []
+
+            # Lab Order 변환
+            for order in lab_orders:
+                results.append({
+                    'id': f'lab_{order.order_id}',
+                    'type': 'LAB',
+                    'type_display': '진단검사',
+                    'order_name': order.get_order_type_display(),
+                    'order_type': order.order_type,
+                    'patient_id': order.patient.patient_id,
+                    'patient_name': order.patient.name,
+                    'doctor_name': order.doctor.name,
+                    'department_name': order.doctor.department.dept_name if order.doctor.department else 'N/A',
+                    'created_at': order.created_at,
+                    'status': order.status,
+                    'status_display': '검사중',
+                    'encounter_id': order.encounter.encounter_id if order.encounter else None
+                })
+
+            # Imaging Order 변환
+            for order in imaging_orders:
+                results.append({
+                    'id': f'img_{order.order_id}',
+                    'type': 'IMAGING',
+                    'type_display': '영상의학',
+                    'order_name': f"{order.modality} ({order.body_part or '전신'})",
+                    'order_type': 'IMAGING',
+                    'patient_id': order.patient.patient_id,
+                    'patient_name': order.patient.name,
+                    'doctor_name': order.doctor.name,
+                    'department_name': order.doctor.department.dept_name if order.doctor.department else 'N/A',
+                    'created_at': order.ordered_at,
+                    'status': order.status,
+                    'status_display': '촬영대기' if order.status == 'WAITING' else '촬영중',
+                    'encounter_id': order.encounter.encounter_id if order.encounter else None
+                })
+
+            # 최신순 정렬
             results.sort(key=lambda x: x['created_at'], reverse=True)
 
             return Response({

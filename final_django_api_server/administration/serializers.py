@@ -1,6 +1,6 @@
 # administration/serializers.py
 from rest_framework import serializers
-from doctor.models import Patient, Appointment, Encounter, MedicalRecord
+from doctor.models import Patient, Appointment, Encounter, MedicalRecord, LabOrder, DoctorToRadiologyOrder
 from datetime import date
 
 # ---------------------------------------------------------
@@ -106,6 +106,8 @@ class EncounterSerializer(serializers.ModelSerializer):
     workflow_state_display = serializers.CharField(source='get_workflow_state_display', read_only=True)
     questionnaire_status = serializers.SerializerMethodField()
     questionnaire_data = serializers.SerializerMethodField()
+    is_returning_patient = serializers.SerializerMethodField()
+    orders_status = serializers.SerializerMethodField()
     
     def get_questionnaire_status(self, obj):
         if hasattr(obj, 'questionnaire'):
@@ -116,6 +118,43 @@ class EncounterSerializer(serializers.ModelSerializer):
         if hasattr(obj, 'questionnaire'):
             return obj.questionnaire.data
         return None
+
+    def get_is_returning_patient(self, obj):
+        """
+        현재 Encounter에 진료 기록(MedicalRecord)이 연결되어 있는지 확인.
+        True면 이미 의사를 만나 진료를 보고 검사를 하러 나간 '재진(추가진료)' 환자임.
+        """
+        return MedicalRecord.objects.filter(encounter=obj).exists()
+
+    def get_orders_status(self, obj):
+        """
+        현재 Encounter에 연결된 모든 오더의 상태 요약 반환.
+        """
+        orders = []
+        
+        # 1. Lab Orders
+        lab_orders = LabOrder.objects.filter(encounter=obj)
+        for order in lab_orders:
+            orders.append({
+                'id': f'lab_{order.order_id}',
+                'name': order.get_order_type_display(),
+                'status': order.status,
+                'status_display': order.get_status_display(),
+                'type': 'LAB'
+            })
+            
+        # 2. Imaging Orders
+        img_orders = DoctorToRadiologyOrder.objects.filter(encounter=obj)
+        for order in img_orders:
+            orders.append({
+                'id': f'img_{order.order_id}',
+                'name': f"{order.modality} ({order.body_part or '전신'})",
+                'status': order.status,
+                'status_display': order.get_status_display(),
+                'type': 'IMAGING'
+            })
+            
+        return orders
 
     class Meta:
         model = Encounter

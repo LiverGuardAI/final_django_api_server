@@ -9,9 +9,11 @@ from .views import (
     EncounterListView,
     EncounterDetailView,
     WaitingQueueView,
+    AdministrationWaitingQueueView,
     CallNextPatientView,
     DashboardStatsView,
     PendingOrdersView,
+    InProgressOrdersView,
     ConfirmOrderView,
     CompleteVitalOrPhysicalView,
 )
@@ -38,9 +40,13 @@ urlpatterns = [
     path('queue/', WaitingQueueView.as_view(), name='waiting_queue'),  # /api/administration/queue/
     path('queue/waiting/', WaitingQueueView.as_view(), name='waiting_queue_alt'),  # 하위 호환성 유지
     path('queue/call-next/', CallNextPatientView.as_view(), name='call_next_patient'),
+    
+    # 원무과 전용 분리형 대기열
+    path('queue/admin/', AdministrationWaitingQueueView.as_view(), name='admin_waiting_queue'),
 
     # 오더 관리 (추가진료 탭)
     path('orders/pending/', PendingOrdersView.as_view(), name='pending_orders'),
+    path('orders/in-progress/', InProgressOrdersView.as_view(), name='in_progress_orders'),
     path('orders/<int:order_id>/confirm/', ConfirmOrderView.as_view(), name='confirm_order'),
     path('orders/<int:order_id>/complete-vital/', CompleteVitalOrPhysicalView.as_view(), name='complete_vital'),
 ]

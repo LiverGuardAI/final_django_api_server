@@ -1,6 +1,7 @@
 from django.db import models
 from django.contrib.postgres.indexes import GinIndex
 from accounts.fields import GenderField, DoctorScheduleTypeField
+from .managers import PatientQuerySet, DoctorQuerySet
 
 # doctor/models.py
 
@@ -21,6 +22,8 @@ class Doctor(models.Model):
     # Foreign Keys
     user = models.OneToOneField('accounts.CustomUser', on_delete=models.CASCADE)
     department = models.ForeignKey('accounts.Department', on_delete=models.RESTRICT)
+    
+    objects = DoctorQuerySet.as_manager()
     
     class Meta:
         db_table = 'hospital"."doctor'
@@ -80,6 +83,8 @@ class Patient(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     profile = models.OneToOneField('patients.UserProfile', on_delete=models.SET_NULL, null=True, blank=True, db_column='profile_id')
+
+    objects = PatientQuerySet.as_manager()
 
     class Meta:
         db_table = 'hospital"."patient'

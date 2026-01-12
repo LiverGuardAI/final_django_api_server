@@ -10,6 +10,7 @@ from .serializers import (
     MedicalRecordDetailSerializer, LabResultSerializer, DoctorToRadiologyOrderSerializer,
     HCCDiagnosisSerializer, CreateLabOrderSerializer, CreateDoctorToRadiologyOrderSerializer, LabOrderSerializer
 )
+from administration.serializers import PatientSerializer
 from datetime import date, datetime
 from django.utils import timezone
 from django.db.models import Q
@@ -70,10 +71,29 @@ class PatientListView(APIView):
     permission_classes = [IsDoctor]
 
     def get(self, request):
-        # 실제로는 DB에서 환자 목록을 가져와야 함
+        # 검색 쿼리
+        search = request.query_params.get('search', '')
+
+        # 환자 쿼리
+        patients = Patient.objects.all()
+
+        if search:
+            # 커스텀 매니저 (search_patient) 사용
+            patients = patients.search_patient(search).order_by('-similarity', '-created_at')
+        else:
+            patients = patients.order_by('-created_at')
+
+        # Limit (선택적)
+        limit = request.query_params.get('limit')
+        if limit:
+            patients = patients[:int(limit)]
+
+        serializer = PatientSerializer(patients, many=True)
+
         return Response({
             'message': '환자 목록',
-            'patients': []  # 실제 환자 데이터로 대체 필요
+            'count': patients.count() if not limit else len(patients), # 슬라이싱 후에는 count() 호출 불가할 수 있음
+            'patients': serializer.data
         }, status=status.HTTP_200_OK)
 
 
@@ -206,6 +226,14 @@ class DoctorListView(APIView):
             department_id = request.query_params.get('department', None)
             if department_id:
                 doctors = doctors.filter(department_id=department_id)
+
+            # 검색 필터 (이름, 사번)
+            search = request.query_params.get('search', '')
+            if search:
+                # 커스텀 매니저 (search_doctor) 사용
+                doctors = doctors.search_doctor(search).order_by('-similarity', 'name')
+            else:
+                doctors = doctors.order_by('name')
 
             serializer = DoctorListSerializer(doctors, many=True)
 
@@ -522,12 +550,14 @@ class DoctorMedicalRecordListView(APIView):
             # 3. 기본 쿼리셋 (assigned_doctor 기준)
             encounters = Encounter.objects.filter(assigned_doctor=doctor).select_related('patient')
 
-            # 4. 검색 필터
+            # 4. 검색 필터 (Trigram 적용 - Patient 검색 재사용)
             if search:
-                encounters = encounters.filter(
-                    Q(patient__name__icontains=search) |
-                    Q(patient__patient_id__icontains=search)
-                )
+                # 1) 환자 검색 (유사도 순 정렬된 결과)
+                target_patients = Patient.objects.search_patient(search)
+                # 2) 해당 환자들의 진료 기록 필터링
+                encounters = encounters.filter(patient__in=target_patients).order_by('-start_time')
+            else:
+                 encounters = encounters.order_by('-start_time')
 
             # 5. 날짜 필터
             if start_date:
@@ -535,8 +565,9 @@ class DoctorMedicalRecordListView(APIView):
             if end_date:
                 encounters = encounters.filter(start_time__date__lte=end_date)
 
-            # 6. 정렬 (최신순)
-            encounters = encounters.order_by('-start_time')
+            # 6. 정렬 (검색어 없을 때만 시간순, 검색어 있으면 위에서 이미 정렬됨)
+            if not search:
+                encounters = encounters.order_by('-start_time')
 
             # 7. 시리얼라이즈
             serializer = EncounterSerializer(encounters, many=True)
