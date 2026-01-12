@@ -171,7 +171,40 @@ class PatientRegistrationView(APIView):
     permission_classes = [IsClerk]
 
     def post(self, request):
-        serializer = PatientSerializer(data=request.data)
+        # 환자번호 자동 생성 (P + YYMMDD + 001-999)
+        today = date.today()
+        date_str = today.strftime('%y%m%d')  # 예: 260112
+        prefix = f'P{date_str}'  # 예: P260112
+
+        # 오늘 등록된 환자 중 가장 높은 순번 찾기
+        existing_patients = Patient.objects.filter(
+            patient_id__startswith=prefix
+        ).order_by('-patient_id')
+
+        if existing_patients.exists():
+            # 마지막 환자번호에서 순번 추출 (P260112001 -> 1)
+            last_patient_id = existing_patients.first().patient_id
+            last_sequence = int(last_patient_id[-3:])
+
+            # 999를 초과하면 에러 반환
+            if last_sequence >= 999:
+                return Response({
+                    'message': '오늘 등록 가능한 환자 수를 초과했습니다. (최대 999명)',
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            next_sequence = last_sequence + 1
+        else:
+            # 오늘 첫 환자
+            next_sequence = 1
+
+        # 환자번호 생성: P260112001
+        new_patient_id = f'{prefix}{next_sequence:03d}'
+
+        # request.data를 복사하고 patient_id 추가
+        data = request.data.copy()
+        data['patient_id'] = new_patient_id
+
+        serializer = PatientSerializer(data=data)
 
         if serializer.is_valid():
             patient = serializer.save(staff=request.user)

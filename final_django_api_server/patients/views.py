@@ -6,6 +6,8 @@ from rest_framework.response import Response
 from rest_framework.authtoken.models import Token
 from django.contrib.auth.hashers import check_password
 from django.utils import timezone
+from django.db import IntegrityError
+from datetime import date
 
 from .models import UserProfile, AppSyncRequest
 from .serializers import SignupSerializer, LoginSerializer, AppSyncRequestSerializer
@@ -210,12 +212,6 @@ def app_sync_request_approve(request, request_id):
     patient_id = request.data.get('patient_id')
     admin_id = request.data.get('admin_id')
 
-    if not patient_id:
-        return Response({
-            "success": False,
-            "message": "환자번호(patient_id)가 필요합니다."
-        }, status=status.HTTP_400_BAD_REQUEST)
-
     try:
         sync_request = AppSyncRequest.objects.select_related('profile').get(request_id=request_id)
 
@@ -226,15 +222,89 @@ def app_sync_request_approve(request, request_id):
                 "message": f"이미 처리된 신청입니다. (현재 상태: {sync_request.get_status_display()})"
             }, status=status.HTTP_400_BAD_REQUEST)
 
-        # 환자번호 유효성 검사 (doctor.Patient 테이블에서 확인)
+        # 환자번호 확인 또는 신규 생성
         from doctor.models import Patient
-        try:
-            patient = Patient.objects.get(patient_id=patient_id)
-        except Patient.DoesNotExist:
-            return Response({
-                "success": False,
-                "message": "존재하지 않는 환자번호입니다."
-            }, status=status.HTTP_404_NOT_FOUND)
+        profile = sync_request.profile
+
+        if patient_id:
+            try:
+                patient = Patient.objects.get(patient_id=patient_id)
+            except Patient.DoesNotExist:
+                return Response({
+                    "success": False,
+                    "message": "존재하지 않는 환자번호입니다."
+                }, status=status.HTTP_404_NOT_FOUND)
+        else:
+            # 이미 프로필에 연결된 환자가 있으면 사용
+            if profile.linked_patient_id:
+                existing = Patient.objects.filter(patient_id=profile.linked_patient_id).first()
+                if existing:
+                    patient = existing
+                    patient_id = existing.patient_id
+                else:
+                    patient = None
+            else:
+                patient = Patient.objects.filter(profile=profile).first()
+
+        if not patient_id:
+            # 신규 환자 자동 생성 (P + YYMMDD + 001-999)
+            today = date.today()
+            date_str = today.strftime('%y%m%d')
+            prefix = f'P{date_str}'
+
+            existing_patients = Patient.objects.filter(
+                patient_id__startswith=prefix
+            ).order_by('-patient_id')
+
+            if existing_patients.exists():
+                last_patient_id = existing_patients.first().patient_id
+                last_sequence = int(last_patient_id[-3:])
+                if last_sequence >= 999:
+                    return Response({
+                        "success": False,
+                        "message": "오늘 등록 가능한 환자 수를 초과했습니다. (최대 999명)"
+                    }, status=status.HTTP_400_BAD_REQUEST)
+                next_sequence = last_sequence + 1
+            else:
+                next_sequence = 1
+
+            new_patient_id = f'{prefix}{next_sequence:03d}'
+
+            age_value = None
+            if profile.birth_date:
+                age_value = today.year - profile.birth_date.year
+                if (today.month, today.day) < (profile.birth_date.month, profile.birth_date.day):
+                    age_value -= 1
+
+            def format_phone_number(value):
+                if not value:
+                    return None
+                digits = ''.join(ch for ch in value if ch.isdigit())
+                if len(digits) == 11:
+                    return f"{digits[:3]}-{digits[3:7]}-{digits[7:]}"
+                return value
+
+            try:
+                patient = Patient.objects.create(
+                    patient_id=new_patient_id,
+                    name=profile.nickname,
+                    date_of_birth=profile.birth_date,
+                    age=age_value,
+                    gender=profile.gender,
+                    phone=format_phone_number(profile.phone_number),
+                    profile=profile
+                )
+                patient_id = patient.patient_id
+            except IntegrityError:
+                existing = Patient.objects.filter(profile=profile).first()
+                if existing:
+                    patient = existing
+                    patient_id = existing.patient_id
+                else:
+                    return Response({
+                        "success": False,
+                        "message": "환자 등록 중 오류가 발생했습니다."
+                    }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
         # 신청 승인 처리
         sync_request.status = AppSyncRequest.Status.APPROVED
@@ -245,7 +315,7 @@ def app_sync_request_approve(request, request_id):
         if admin_id:
             from administration.models import Administration
             try:
-                admin = Administration.objects.get(admin_id=admin_id)
+                admin = Administration.objects.get(staff_id=admin_id)
                 sync_request.processed_by = admin
             except Administration.DoesNotExist:
                 pass
@@ -253,7 +323,6 @@ def app_sync_request_approve(request, request_id):
         sync_request.save()
 
         # UserProfile 업데이트
-        profile = sync_request.profile
         profile.linked_patient_id = patient_id
         profile.is_verified = True
         profile.save()
@@ -304,7 +373,7 @@ def app_sync_request_reject(request, request_id):
         if admin_id:
             from administration.models import Administration
             try:
-                admin = Administration.objects.get(admin_id=admin_id)
+                admin = Administration.objects.get(staff_id=admin_id)
                 sync_request.processed_by = admin
             except Administration.DoesNotExist:
                 pass
