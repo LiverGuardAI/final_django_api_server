@@ -46,6 +46,7 @@ def signup_view(request):
                 "profile_id": user_profile.profile_id,
                 "nickname": user_profile.nickname,
                 "user_id": user_profile.user_id,
+                "birth_date": user_profile.birth_date.isoformat() if user_profile.birth_date else None,
             }
         }, status=status.HTTP_201_CREATED)
 
@@ -94,6 +95,7 @@ def login_view(request):
                     "profile_id": user_profile.profile_id,
                     "nickname": user_profile.nickname,
                     "user_id": user_profile.user_id,
+                    "birth_date": user_profile.birth_date.isoformat() if user_profile.birth_date else None,
                 }
             }, status=status.HTTP_200_OK)
         else:
@@ -341,6 +343,116 @@ def app_sync_request_approve(request, request_id):
             "message": "존재하지 않는 신청입니다."
         }, status=status.HTTP_404_NOT_FOUND)
 
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def app_sync_request_verify(request):
+    """
+    환자 ID 기반 연동 승인 (Flutter 앱에서 호출)
+
+    POST /api/patients/app-sync-requests/verify/
+    {
+        "profile": <profile_id>,
+        "patient_id": "P20240101001"
+    }
+    """
+    profile_id = request.data.get('profile')
+    patient_id = request.data.get('patient_id')
+
+    if not profile_id or not patient_id:
+        return Response({
+            "success": False,
+            "message": "profile_id와 patient_id가 필요합니다."
+        }, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        profile = UserProfile.objects.get(profile_id=profile_id)
+
+        from doctor.models import Patient
+        try:
+            patient = Patient.objects.get(patient_id=patient_id)
+        except Patient.DoesNotExist:
+            return Response({
+                "success": False,
+                "message": "존재하지 않는 환자번호입니다."
+            }, status=status.HTTP_404_NOT_FOUND)
+
+        if patient.profile and patient.profile_id != profile.profile_id:
+            return Response({
+                "success": False,
+                "message": "이미 연동된 환자입니다."
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        def normalize_phone(value):
+            if not value:
+                return ''
+            return ''.join(ch for ch in value if ch.isdigit())
+
+        def format_phone(value):
+            digits = normalize_phone(value)
+            if len(digits) == 11:
+                return f"{digits[:3]}-{digits[3:7]}-{digits[7:]}"
+            return value
+
+        profile_phone = normalize_phone(profile.phone_number)
+        patient_phone = normalize_phone(patient.phone)
+
+        is_match = (
+            profile.nickname == patient.name and
+            profile.birth_date == patient.date_of_birth and
+            profile.gender == patient.gender and
+            profile_phone and patient_phone and profile_phone == patient_phone
+        )
+
+        if not is_match:
+            return Response({
+                "success": False,
+                "message": "환자 정보와 일치하지 않습니다."
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        if profile.phone_number:
+            patient.phone = format_phone(profile.phone_number)
+        patient.profile = profile
+        patient.save()
+
+        sync_request = AppSyncRequest.objects.filter(
+            profile=profile
+        ).order_by('-requested_at').first()
+
+        if sync_request and sync_request.status != AppSyncRequest.Status.PENDING:
+            return Response({
+                "success": False,
+                "message": "이미 처리된 신청입니다."
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        if not sync_request:
+            sync_request = AppSyncRequest.objects.create(
+                profile=profile,
+                status=AppSyncRequest.Status.PENDING
+            )
+
+        sync_request.status = AppSyncRequest.Status.APPROVED
+        sync_request.assigned_patient_id = patient.patient_id
+        sync_request.processed_at = timezone.now()
+        sync_request.save()
+
+        profile.linked_patient_id = patient.patient_id
+        profile.is_verified = True
+        profile.save()
+
+        serializer = AppSyncRequestSerializer(sync_request)
+
+        return Response({
+            "success": True,
+            "message": "연동 신청이 승인되었습니다.",
+            "request": serializer.data
+        }, status=status.HTTP_200_OK)
+
+    except UserProfile.DoesNotExist:
+        return Response({
+            "success": False,
+            "message": "존재하지 않는 사용자입니다."
+        }, status=status.HTTP_404_NOT_FOUND)
 
 @api_view(['POST'])
 @permission_classes([AllowAny])
