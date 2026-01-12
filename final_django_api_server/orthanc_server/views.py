@@ -4,6 +4,7 @@ from rest_framework import status
 from rest_framework.permissions import AllowAny
 from rest_framework.parsers import MultiPartParser, FormParser
 import requests
+from django.utils import timezone
 import io
 import pydicom
 import nibabel as nib
@@ -62,6 +63,7 @@ def _get_or_create_study(tags: dict, patient_id: str) -> DICOMStudy | None:
         'modality': tags.get('Modality'),
         'study_description': tags.get('StudyDescription'),
         'institution_name': tags.get('InstitutionName'),
+        'study_datetime': timezone.now(),
     }
     study, _ = DICOMStudy.objects.get_or_create(study_uid=study_uid, defaults=defaults)
     return study
@@ -78,6 +80,7 @@ def _get_or_create_series(tags: dict, parent_series_id: str | None, study: DICOM
         'series_number': int(tags.get('SeriesNumber')) if tags.get('SeriesNumber') else None,
         'series_description': tags.get('SeriesDescription'),
         'protocol_name': tags.get('ProtocolName'),
+        'acquisition_datetime': timezone.now(),
     }
     series, created = DICOMSeries.objects.get_or_create(series_uid=series_uid, defaults=defaults)
     if not created and parent_series_id and not series.orthanc_series_id:
