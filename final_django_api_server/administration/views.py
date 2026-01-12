@@ -3,7 +3,7 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from accounts.permissions import IsClerk
-from doctor.models import Patient, Appointment, Encounter
+from doctor.models import Patient, Appointment, Encounter, LabOrder, VitalData, AnthropometricData, MedicalRecord
 from .serializers import (
     PatientSerializer,
     AppointmentSerializer,
@@ -17,6 +17,7 @@ from .cache_manager import cache_manager
 from django.db import transaction
 from channels.layers import get_channel_layer
 from asgiref.sync import async_to_sync
+from django.utils import timezone
 
 
 def send_queue_update_websocket(message="대기열이 업데이트되었습니다.", extra_data=None):
@@ -418,33 +419,10 @@ class EncounterDetailView(APIView):
                 new_workflow_state = request.data.get('workflow_state') or request.data.get('status')
 
             if new_workflow_state:
-                encounter.workflow_state = new_workflow_state
-                encounter.state_entered_at = datetime.now()  # 상태 진입 시간 갱신
-
-                # FHIR 레벨 status 자동 설정
-                if new_workflow_state in [Encounter.WorkflowState.REQUESTED, Encounter.WorkflowState.REGISTERED]:
-                    encounter.status = Encounter.Status.PLANNED
-                elif new_workflow_state in [Encounter.WorkflowState.WAITING_CLINIC, Encounter.WorkflowState.IN_CLINIC,
-                                            Encounter.WorkflowState.WAITING_IMAGING, Encounter.WorkflowState.IN_IMAGING,
-                                            Encounter.WorkflowState.WAITING_RESULTS]:
-                    encounter.status = Encounter.Status.IN_PROGRESS
-                elif new_workflow_state == Encounter.WorkflowState.COMPLETED:
-                    encounter.status = Encounter.Status.COMPLETED
-                elif new_workflow_state == Encounter.WorkflowState.CANCELLED:
-                    encounter.status = Encounter.Status.CANCELLED
-
+                # 통합 상태 변경 메서드 사용 (Redis 캐시 업데이트 포함)
+                current_location = request.data.get('current_location')
+                encounter.transition_to(new_workflow_state, current_location)
                 updated = True
-
-                # 완료/취소 시 종료 시간 기록
-                if new_workflow_state in [Encounter.WorkflowState.COMPLETED, Encounter.WorkflowState.CANCELLED]:
-                    encounter.end_time = datetime.now()
-
-                # Redis 카운트 업데이트
-                if old_workflow_state == Encounter.WorkflowState.WAITING_CLINIC and new_workflow_state == Encounter.WorkflowState.IN_CLINIC:
-                    cache_manager.decrement_waiting_count('clinic')
-                    cache_manager.increment_in_progress_count('clinic')
-                elif old_workflow_state == Encounter.WorkflowState.IN_CLINIC and new_workflow_state == Encounter.WorkflowState.COMPLETED:
-                    cache_manager.decrement_in_progress_count('clinic')
 
             # 위치 변경
             if 'current_location' in request.data:
@@ -548,14 +526,15 @@ class WaitingQueueView(APIView):
             }, status=status.HTTP_200_OK)
 
         # 캐시 미스: DB에서 조회 후 Redis에 저장 (state_entered_at 기준 FIFO)
-        # 캐시 미스: DB에서 조회 후 Redis에 저장 (state_entered_at 기준 FIFO)
         from django.db.models import Q
         from django.utils import timezone
         
-        # 기본 대기열 상태: 대기중, 진료중
+        # 기본 대기열 상태: 대기중, 진료중, 결과대기(추가진료), 수납대기
         filter_condition = Q(workflow_state__in=[
             Encounter.WorkflowState.WAITING_CLINIC,
-            Encounter.WorkflowState.IN_CLINIC
+            Encounter.WorkflowState.IN_CLINIC,
+            Encounter.WorkflowState.WAITING_RESULTS,
+            Encounter.WorkflowState.WAITING_PAYMENT
         ])
 
         # 오늘 완료된 진료는 항상 포함 (의사 사이드바 및 원무과 대기현황용)
@@ -694,18 +673,14 @@ class PendingOrdersView(APIView):
             from doctor.models import LabOrder, DoctorToRadiologyOrder
             from django.utils import timezone
 
-            today_start = timezone.localtime(timezone.now()).replace(hour=0, minute=0, second=0, microsecond=0)
-            
-            # 1. Lab Orders (REQUESTED) - 오늘 날짜 기준
+            # 1. Lab Orders (REQUESTED) - 모든 미처리 오더
             lab_orders = LabOrder.objects.filter(
-                status='REQUESTED',
-                created_at__gte=today_start
+                status='REQUESTED'
             ).select_related('patient', 'doctor', 'doctor__department').order_by('-created_at')
 
-            # 2. Imaging Orders (REQUESTED) - 오늘 날짜 기준
+            # 2. Imaging Orders (REQUESTED) - 모든 미처리 오더
             imaging_orders = DoctorToRadiologyOrder.objects.filter(
-                status='REQUESTED',
-                ordered_at__gte=today_start
+                status='REQUESTED'
             ).select_related('patient', 'doctor', 'doctor__department').order_by('-ordered_at')
 
             results = []
@@ -717,13 +692,15 @@ class PendingOrdersView(APIView):
                     'type': 'LAB',
                     'type_display': '진단검사',
                     'order_name': order.get_order_type_display(),
+                    'order_type': order.order_type,  # 추가: 세부 오더 타입
                     'patient_id': order.patient.patient_id,
                     'patient_name': order.patient.name,
                     'doctor_name': order.doctor.name,
                     'department_name': order.doctor.department.dept_name if order.doctor.department else 'N/A',
                     'created_at': order.created_at,
                     'status': order.status,
-                    'status_display': '검사대기'
+                    'status_display': '검사대기',
+                    'encounter_id': order.encounter.encounter_id if order.encounter else None  # 추가: encounter_id
                 })
 
             # Imaging Order 변환
@@ -733,13 +710,15 @@ class PendingOrdersView(APIView):
                     'type': 'IMAGING',
                     'type_display': '영상의학',
                     'order_name': f"{order.modality} ({order.body_part or '전신'})",
+                    'order_type': 'IMAGING',  # 추가: 일관성을 위해
                     'patient_id': order.patient.patient_id,
                     'patient_name': order.patient.name,
                     'doctor_name': order.doctor.name,
                     'department_name': order.doctor.department.dept_name if order.doctor.department else 'N/A',
                     'created_at': order.ordered_at,
                     'status': order.status,
-                    'status_display': '촬영대기'
+                    'status_display': '촬영대기',
+                    'encounter_id': order.encounter.encounter_id if order.encounter else None  # 추가: encounter_id
                 })
 
             # 최신순 정렬 (created_at 기준)
@@ -787,7 +766,14 @@ class ConfirmOrderView(APIView):
             else:
                 return Response({'error': 'Invalid order type'}, status=status.HTTP_400_BAD_REQUEST)
 
-            # 귀가 조치 로직
+            # 단순 접수 (CONFIRM) 인 경우 -> 결과 대기 상태로 변경 (그래야 원무과 '추가진료' 탭에 뜸)
+            if action == 'CONFIRM' and encounter_to_close:
+                # 이미 완료된 상태가 아니라면 결과대기로 변경
+                if encounter_to_close.workflow_state != Encounter.WorkflowState.COMPLETED:
+                    encounter_to_close.workflow_state = Encounter.WorkflowState.WAITING_RESULTS
+                    encounter_to_close.save()
+
+            # 귀가 조치 로직 (CONFIRM_AND_DISCHARGE)
             if action == 'CONFIRM_AND_DISCHARGE' and encounter_to_close:
                 encounter_to_close.workflow_state = Encounter.WorkflowState.COMPLETED
                 encounter_to_close.status = Encounter.Status.COMPLETED
@@ -798,6 +784,74 @@ class ConfirmOrderView(APIView):
 
         except (LabOrder.DoesNotExist, DoctorToRadiologyOrder.DoesNotExist):
              return Response({'error': '오더를 찾을 수 없습니다.'}, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class CompleteVitalOrPhysicalView(APIView):
+    """
+    바이탈/신체계측 데이터 입력 및 저장 API
+    """
+    permission_classes = [IsAuthenticated]
+
+    def patch(self, request, order_id):
+        try:
+            order_type = request.data.get('order_type')  # 'VITAL' or 'PHYSICAL'
+            lab_data = request.data.get('lab_data', {})
+
+            # LabOrder 조회
+            order = LabOrder.objects.get(order_id=order_id, order_type=order_type)
+            
+            # Encounter 및 Patient 가져오기
+            encounter = order.encounter
+            patient = order.patient
+
+            # MedicalRecord 생성 또는 가져오기
+            medical_record, created = MedicalRecord.objects.get_or_create(
+                encounter=encounter,
+                patient=patient,
+                defaults={
+                    'record_date': timezone.now().date(),
+                    'record_time': timezone.now().time(),
+                    'doctor': encounter.assigned_doctor,
+                    'staff': request.user.administration if hasattr(request.user, 'administration') else None,
+                    'record_status': MedicalRecord.RecordStatus.DRAFT,
+                }
+            )
+
+            if order_type == 'VITAL':
+                # 바이탈 데이터 저장
+                VitalData.objects.create(
+                    patient=patient,
+                    medical_record=medical_record,
+                    measured_at=timezone.now().date(),
+                    sbp=lab_data.get('systolic_bp'),
+                    dbp=lab_data.get('diastolic_bp'),
+                )
+            
+            elif order_type == 'PHYSICAL':
+                #신체계측 데이터 저장
+                AnthropometricData.objects.create(
+                    patient=patient,
+                    medical_record=medical_record,
+                    measured_at=timezone.now().date(),
+                    height=lab_data.get('height'),
+                    weight=lab_data.get('weight'),
+                    bmi=lab_data.get('bmi'),
+                )
+
+            # 오더 상태를 완료로 변경
+            order.status = LabOrder.OrderStatus.COMPLETED
+            order.save()
+
+            return Response({
+                'message': '검사 데이터가 저장되었습니다.',
+                'encounter_id': encounter.encounter_id,
+                'patient_id': patient.patient_id
+            }, status=status.HTTP_200_OK)
+
+        except LabOrder.DoesNotExist:
+            return Response({'error': '오더를 찾을 수 없습니다.'}, status=status.HTTP_404_NOT_FOUND)
         except Exception as e:
             return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 

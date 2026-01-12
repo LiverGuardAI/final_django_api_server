@@ -13,6 +13,7 @@ from .views import (
     DashboardStatsView,
     PendingOrdersView,
     ConfirmOrderView,
+    CompleteVitalOrPhysicalView,
 )
 
 urlpatterns = [
@@ -41,4 +42,5 @@ urlpatterns = [
     # 오더 관리 (추가진료 탭)
     path('orders/pending/', PendingOrdersView.as_view(), name='pending_orders'),
     path('orders/<int:order_id>/confirm/', ConfirmOrderView.as_view(), name='confirm_order'),
+    path('orders/<int:order_id>/complete-vital/', CompleteVitalOrPhysicalView.as_view(), name='complete_vital'),
 ]

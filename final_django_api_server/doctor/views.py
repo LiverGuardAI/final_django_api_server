@@ -15,6 +15,7 @@ from django.utils import timezone
 from django.db.models import Q
 from channels.layers import get_channel_layer
 from asgiref.sync import async_to_sync
+from administration.cache_manager import cache_manager
 
 
 class DoctorDashboardView(APIView):
@@ -24,23 +25,26 @@ class DoctorDashboardView(APIView):
     def get(self, request):
         user = request.user
 
-        # 오늘 날짜
-        today = date.today()
-
-        # 대기 환자 (진료 대기) - 날짜 제한 없이 현재 대기 중인 모든 환자
+        # 진료실 대기 환자 (WAITING_CLINIC만)
         clinic_waiting = Encounter.objects.filter(
             workflow_state=Encounter.WorkflowState.WAITING_CLINIC
         ).count()
 
-        # 진료 중 환자 - 날짜 제한 없이 현재 진료 중인 모든 환자
+        # 진료 중 환자 (IN_CLINIC만)
         clinic_in_progress = Encounter.objects.filter(
             workflow_state=Encounter.WorkflowState.IN_CLINIC
         ).count()
 
-        # 완료 환자 - 오늘 완료된 환자만
+        # 진료 후 처리 중인 환자 (수납 대기, 결과 대기, 촬영 대기/중)
+        # 최종 수납 완료(COMPLETED) 된 환자는 제외
+        post_clinic_states = [
+            Encounter.WorkflowState.WAITING_PAYMENT,
+            Encounter.WorkflowState.WAITING_RESULTS,
+            Encounter.WorkflowState.WAITING_IMAGING,
+            Encounter.WorkflowState.IN_IMAGING,
+        ]
         completed_today = Encounter.objects.filter(
-            updated_at__date=today,
-            workflow_state=Encounter.WorkflowState.COMPLETED
+            workflow_state__in=post_clinic_states
         ).count()
 
         return Response({
@@ -80,20 +84,22 @@ class QueueListView(APIView):
     def get(self, request):
         try:
             # 오늘 날짜
-            today = date.today()
+
 
             # 쿼리 파라미터로 상태 필터링 (기본값: WAITING_CLINIC)
             encounter_status = request.query_params.get('status', 'WAITING_CLINIC')
             doctor_id = request.query_params.get('doctor_id')
 
             # Encounter 조회
-            encounters = Encounter.objects.filter(
-                created_at__date=today
-            )
+            # 수납 완료(COMPLETED) 및 취소(CANCELLED)된 환자는 목록에서 제외 (사용자 요청)
+            exclude_states = [
+                Encounter.WorkflowState.COMPLETED,
+                Encounter.WorkflowState.CANCELLED,
+            ]
             
-            # 의사별 필터링
-            if doctor_id:
-                encounters = encounters.filter(assigned_doctor_id=doctor_id)
+            encounters = Encounter.objects.exclude(
+                workflow_state__in=exclude_states
+            )
 
             # 상태별 필터링
             if encounter_status == 'ALL':
@@ -110,7 +116,8 @@ class QueueListView(APIView):
 
             # 통계 정보
             # 통계 정보 (필터링 적용된 기준)
-            base_qs = Encounter.objects.filter(created_at__date=today)
+            # 통계 정보 (필터링 적용된 기준) - 날짜 제한 없음
+            base_qs = Encounter.objects.all()
             if doctor_id:
                 base_qs = base_qs.filter(assigned_doctor_id=doctor_id)
 
@@ -158,31 +165,9 @@ class UpdateEncounterStatusView(APIView):
                 new_workflow_state = serializer.validated_data.get('workflow_state') or serializer.validated_data.get('status')
 
                 if new_workflow_state:
-                    # 워크플로우 상태 설정
-                    encounter.workflow_state = new_workflow_state
-                    encounter.state_entered_at = timezone.now()
-
-                    # FHIR 레벨 status 자동 설정
-                    if new_workflow_state in [Encounter.WorkflowState.REQUESTED, Encounter.WorkflowState.REGISTERED]:
-                        encounter.status = Encounter.Status.PLANNED
-                    elif new_workflow_state in [Encounter.WorkflowState.WAITING_CLINIC, Encounter.WorkflowState.IN_CLINIC,
-                                                Encounter.WorkflowState.WAITING_IMAGING, Encounter.WorkflowState.IN_IMAGING,
-                                                Encounter.WorkflowState.WAITING_RESULTS]:
-                        encounter.status = Encounter.Status.IN_PROGRESS
-                    elif new_workflow_state == Encounter.WorkflowState.COMPLETED:
-                        encounter.status = Encounter.Status.COMPLETED
-                    elif new_workflow_state == Encounter.WorkflowState.CANCELLED:
-                        encounter.status = Encounter.Status.CANCELLED
-
-                    # 완료 시간 자동 설정
-                    if new_workflow_state == Encounter.WorkflowState.COMPLETED and not encounter.end_time:
-                        encounter.end_time = timezone.now()
-
-                # 위치 변경
-                if 'current_location' in serializer.validated_data:
-                    encounter.current_location = serializer.validated_data['current_location']
-
-                encounter.save()
+                    # 통합 상태 변경 메서드 사용 (Redis 캐시 업데이트 포함)
+                    current_location = serializer.validated_data.get('current_location')
+                    encounter.transition_to(new_workflow_state, current_location)
 
                 # 업데이트된 데이터 반환
                 response_serializer = EncounterSerializer(encounter)

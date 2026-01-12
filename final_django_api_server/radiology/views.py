@@ -104,12 +104,9 @@ class StartFilmingView(APIView):
                     'error': f'Encounter for patient {patient_id} not found'
                 }, status=status.HTTP_404_NOT_FOUND)
 
-            # 상태 업데이트
-            encounter.workflow_state = Encounter.WorkflowState.IN_IMAGING
-            encounter.status = Encounter.Status.IN_PROGRESS
-            encounter.state_entered_at = timezone.now()
-            encounter.save()
-
+            # 상태 업데이트 (통합 메서드 사용)
+            encounter.transition_to(Encounter.WorkflowState.IN_IMAGING)
+            
             # 업데이트된 환자 정보 직렬화
             serializer = EncounterWaitlistSerializer(encounter)
 
@@ -158,12 +155,9 @@ class EndFilmingView(APIView):
                     'error': f'Encounter for patient {patient_id} not found'
                 }, status=status.HTTP_404_NOT_FOUND)
 
-            # 상태 업데이트
-            encounter.workflow_state = Encounter.WorkflowState.COMPLETED
-            encounter.status = Encounter.Status.COMPLETED
-            encounter.end_time = timezone.now()
-            encounter.state_entered_at = timezone.now()
-            encounter.save()
+            # 상태 업데이트 (통합 메서드 사용)
+            encounter.transition_to(Encounter.WorkflowState.COMPLETED)
+            # transition_to 내부에서 save()가 호출됨
 
             # 업데이트된 환자 정보 직렬화
             serializer = EncounterWaitlistSerializer(encounter)

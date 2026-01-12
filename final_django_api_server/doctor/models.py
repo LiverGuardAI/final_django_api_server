@@ -127,6 +127,7 @@ class Encounter(models.Model):
         WAITING_RESULTS = 'WAITING_RESULTS', '결과대기'
         WAITING_IMAGING = 'WAITING_IMAGING', '촬영대기'
         IN_IMAGING = 'IN_IMAGING', '촬영중'
+        WAITING_PAYMENT = 'WAITING_PAYMENT', '수납대기'
         COMPLETED = 'COMPLETED', '완료'
         CANCELLED = 'CANCELLED', '취소'
 
@@ -178,6 +179,62 @@ class Encounter(models.Model):
 
     class Meta:
         db_table = 'hospital"."encounters'
+
+    def transition_to(self, new_state, current_location=None):
+        """
+        상태 변경 통합 메서드
+        - workflow_state 변경
+        - FHIR status 자동 매핑
+        - timestamp 업데이트
+        - Redis 대기열 카운트 업데이트
+        """
+        from django.utils import timezone
+        from administration.cache_manager import cache_manager
+
+        old_state = self.workflow_state
+        
+        # 1. 상태 변경
+        self.workflow_state = new_state
+        self.state_entered_at = timezone.now()
+
+        # 2. 위치 변경 (옵션)
+        if current_location:
+            self.current_location = current_location
+
+        # 3. FHIR Status 매핑
+        if new_state in [self.WorkflowState.REQUESTED, self.WorkflowState.REGISTERED]:
+            self.status = self.Status.PLANNED
+        elif new_state in [self.WorkflowState.WAITING_CLINIC, self.WorkflowState.IN_CLINIC,
+                           self.WorkflowState.WAITING_IMAGING, self.WorkflowState.IN_IMAGING,
+                           self.WorkflowState.WAITING_RESULTS, self.WorkflowState.WAITING_PAYMENT]:
+            self.status = self.Status.IN_PROGRESS
+        elif new_state == self.WorkflowState.COMPLETED:
+            self.status = self.Status.COMPLETED
+            if not self.end_time:
+                self.end_time = timezone.now()
+        elif new_state == self.WorkflowState.CANCELLED:
+            self.status = self.Status.CANCELLED
+            if not self.end_time:
+                self.end_time = timezone.now()
+
+        self.save()
+
+        # 4. Redis Cache 업데이트 (상태 변화에 따른 카운트 조정)
+        try:
+            # 진료 대기 -> 진료 중
+            if old_state == self.WorkflowState.WAITING_CLINIC and new_state == self.WorkflowState.IN_CLINIC:
+                cache_manager.decrement_waiting_count('clinic')
+                cache_manager.increment_in_progress_count('clinic')
+            # 진료 중 -> 완료 (또는 수납대기/결과대기 등으로 나감)
+            elif old_state == self.WorkflowState.IN_CLINIC and new_state != self.WorkflowState.IN_CLINIC:
+                cache_manager.decrement_in_progress_count('clinic')
+                # 주의: 수납대기 등은 별도 카운트가 없다면 in_progress만 감소시킴
+            
+            # 기타 필요한 Redis 로직 추가 가능
+            
+        except Exception as e:
+            print(f"Redis cache update failed: {e}")
+            # 캐시 업데이트 실패가 트랜잭션을 롤백시키면 안 됨 (로그만 남김)
         ordering = ['state_entered_at']  # FIFO 대기열
 
     def __str__(self):
