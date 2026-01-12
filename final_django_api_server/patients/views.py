@@ -5,9 +5,10 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.authtoken.models import Token
 from django.contrib.auth.hashers import check_password
+from django.utils import timezone
 
-from .models import UserProfile
-from .serializers import SignupSerializer, LoginSerializer
+from .models import UserProfile, AppSyncRequest
+from .serializers import SignupSerializer, LoginSerializer, AppSyncRequestSerializer
 
 
 @api_view(['POST'])
@@ -104,3 +105,258 @@ def login_view(request):
             "success": False,
             "message": "존재하지 않는 아이디입니다."
         }, status=status.HTTP_404_NOT_FOUND)
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def app_sync_request_create(request):
+    """
+    앱 연동 신청 생성 (Flutter 앱에서 호출)
+
+    POST /api/patients/app-sync-requests/
+    {
+        "profile": <profile_id>
+    }
+    """
+    profile_id = request.data.get('profile')
+
+    if not profile_id:
+        return Response({
+            "success": False,
+            "message": "profile_id가 필요합니다."
+        }, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        profile = UserProfile.objects.get(profile_id=profile_id)
+
+        # 이미 연동된 사용자인지 확인
+        if profile.is_verified and profile.linked_patient_id:
+            return Response({
+                "success": False,
+                "message": "이미 연동된 계정입니다."
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        # 이미 대기 중인 신청이 있는지 확인
+        existing_request = AppSyncRequest.objects.filter(
+            profile=profile,
+            status=AppSyncRequest.Status.PENDING
+        ).first()
+
+        if existing_request:
+            return Response({
+                "success": False,
+                "message": "이미 승인 대기 중인 신청이 있습니다."
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        # 새 신청 생성
+        sync_request = AppSyncRequest.objects.create(
+            profile=profile,
+            status=AppSyncRequest.Status.PENDING
+        )
+
+        serializer = AppSyncRequestSerializer(sync_request)
+
+        return Response({
+            "success": True,
+            "message": "연동 신청이 완료되었습니다. 원무과의 승인을 기다려주세요.",
+            "request": serializer.data
+        }, status=status.HTTP_201_CREATED)
+
+    except UserProfile.DoesNotExist:
+        return Response({
+            "success": False,
+            "message": "존재하지 않는 사용자입니다."
+        }, status=status.HTTP_404_NOT_FOUND)
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def app_sync_request_list(request):
+    """
+    앱 연동 신청 목록 조회 (React 원무과 화면에서 호출)
+
+    GET /api/patients/app-sync-requests/?status=PENDING
+    """
+    status_filter = request.query_params.get('status', None)
+
+    sync_requests = AppSyncRequest.objects.select_related('profile', 'processed_by').all()
+
+    if status_filter:
+        sync_requests = sync_requests.filter(status=status_filter)
+
+    sync_requests = sync_requests.order_by('-requested_at')
+
+    serializer = AppSyncRequestSerializer(sync_requests, many=True)
+
+    return Response({
+        "success": True,
+        "count": sync_requests.count(),
+        "results": serializer.data
+    }, status=status.HTTP_200_OK)
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def app_sync_request_approve(request, request_id):
+    """
+    앱 연동 신청 승인 (React 원무과 화면에서 호출)
+
+    POST /api/patients/app-sync-requests/<request_id>/approve/
+    {
+        "patient_id": "P20240101001",
+        "admin_id": <administration_id>
+    }
+    """
+    patient_id = request.data.get('patient_id')
+    admin_id = request.data.get('admin_id')
+
+    if not patient_id:
+        return Response({
+            "success": False,
+            "message": "환자번호(patient_id)가 필요합니다."
+        }, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        sync_request = AppSyncRequest.objects.select_related('profile').get(request_id=request_id)
+
+        # 이미 처리된 신청인지 확인
+        if sync_request.status != AppSyncRequest.Status.PENDING:
+            return Response({
+                "success": False,
+                "message": f"이미 처리된 신청입니다. (현재 상태: {sync_request.get_status_display()})"
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        # 환자번호 유효성 검사 (doctor.Patient 테이블에서 확인)
+        from doctor.models import Patient
+        try:
+            patient = Patient.objects.get(patient_id=patient_id)
+        except Patient.DoesNotExist:
+            return Response({
+                "success": False,
+                "message": "존재하지 않는 환자번호입니다."
+            }, status=status.HTTP_404_NOT_FOUND)
+
+        # 신청 승인 처리
+        sync_request.status = AppSyncRequest.Status.APPROVED
+        sync_request.assigned_patient_id = patient_id
+        sync_request.processed_at = timezone.now()
+
+        # admin_id가 제공된 경우 처리자 정보 저장
+        if admin_id:
+            from administration.models import Administration
+            try:
+                admin = Administration.objects.get(admin_id=admin_id)
+                sync_request.processed_by = admin
+            except Administration.DoesNotExist:
+                pass
+
+        sync_request.save()
+
+        # UserProfile 업데이트
+        profile = sync_request.profile
+        profile.linked_patient_id = patient_id
+        profile.is_verified = True
+        profile.save()
+
+        serializer = AppSyncRequestSerializer(sync_request)
+
+        return Response({
+            "success": True,
+            "message": f"연동 신청이 승인되었습니다. ({profile.nickname} → {patient_id})",
+            "request": serializer.data
+        }, status=status.HTTP_200_OK)
+
+    except AppSyncRequest.DoesNotExist:
+        return Response({
+            "success": False,
+            "message": "존재하지 않는 신청입니다."
+        }, status=status.HTTP_404_NOT_FOUND)
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def app_sync_request_reject(request, request_id):
+    """
+    앱 연동 신청 거절 (React 원무과 화면에서 호출)
+
+    POST /api/patients/app-sync-requests/<request_id>/reject/
+    {
+        "admin_id": <administration_id>  # 선택사항
+    }
+    """
+    admin_id = request.data.get('admin_id')
+
+    try:
+        sync_request = AppSyncRequest.objects.get(request_id=request_id)
+
+        # 이미 처리된 신청인지 확인
+        if sync_request.status != AppSyncRequest.Status.PENDING:
+            return Response({
+                "success": False,
+                "message": f"이미 처리된 신청입니다. (현재 상태: {sync_request.get_status_display()})"
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        # 신청 거절 처리
+        sync_request.status = AppSyncRequest.Status.REJECTED
+        sync_request.processed_at = timezone.now()
+
+        # admin_id가 제공된 경우 처리자 정보 저장
+        if admin_id:
+            from administration.models import Administration
+            try:
+                admin = Administration.objects.get(admin_id=admin_id)
+                sync_request.processed_by = admin
+            except Administration.DoesNotExist:
+                pass
+
+        sync_request.save()
+
+        serializer = AppSyncRequestSerializer(sync_request)
+
+        return Response({
+            "success": True,
+            "message": "연동 신청이 거절되었습니다.",
+            "request": serializer.data
+        }, status=status.HTTP_200_OK)
+
+    except AppSyncRequest.DoesNotExist:
+        return Response({
+            "success": False,
+            "message": "존재하지 않는 신청입니다."
+        }, status=status.HTTP_404_NOT_FOUND)
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def app_sync_request_status(request, profile_id):
+    """
+    특정 사용자의 연동 신청 상태 조회 (Flutter 앱에서 호출)
+
+    GET /api/patients/app-sync-requests/status/<profile_id>/
+    """
+    try:
+        # 가장 최근 신청 조회
+        sync_request = AppSyncRequest.objects.filter(
+            profile_id=profile_id
+        ).order_by('-requested_at').first()
+
+        if not sync_request:
+            return Response({
+                "success": True,
+                "has_request": False,
+                "message": "연동 신청 내역이 없습니다."
+            }, status=status.HTTP_200_OK)
+
+        serializer = AppSyncRequestSerializer(sync_request)
+
+        return Response({
+            "success": True,
+            "has_request": True,
+            "request": serializer.data
+        }, status=status.HTTP_200_OK)
+
+    except Exception as e:
+        return Response({
+            "success": False,
+            "message": str(e)
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

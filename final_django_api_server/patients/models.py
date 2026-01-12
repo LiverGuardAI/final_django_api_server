@@ -283,7 +283,7 @@ class MedicationNotification(models.Model):
 
 class MedicationAdherence(models.Model):
     """복약 순응도 통계"""
-    
+
     adherence_id = models.BigAutoField(primary_key=True)
     period_start = models.DateField()
     period_end = models.DateField()
@@ -296,9 +296,77 @@ class MedicationAdherence(models.Model):
     current_streak_days = models.IntegerField(blank=True, null=True)
     longest_streak_days = models.IntegerField(blank=True, null=True)
     calculated_at = models.DateTimeField(auto_now_add=True)
-    
+
     profile = models.ForeignKey(UserProfile, on_delete=models.CASCADE, db_column='profile_id')
     med = models.ForeignKey(MedicationDetail, on_delete=models.CASCADE, db_column='med_id')
-    
+
     class Meta:
         db_table = 'app"."medication_adherence'
+
+
+class AppSyncRequest(models.Model):
+    """
+    앱 연동 신청
+
+    Flutter 앱 사용자가 병원 환자 기록과 연동하기 위한 신청을 관리합니다.
+    원무과 직원이 React 관리자 화면에서 신청을 승인/거절하면,
+    UserProfile에 linked_patient_id가 설정되고 is_verified가 True로 변경됩니다.
+
+    워크플로우:
+    1. Flutter 앱에서 연동 신청 (status=PENDING)
+    2. React 원무과 화면에서 신청 목록 확인
+    3. 원무과 직원이 환자번호를 입력하고 승인/거절
+    4. 승인 시: UserProfile.linked_patient_id 업데이트, is_verified=True
+    5. Flutter 앱에서 연동 완료 알림 수신
+    """
+
+    class Status(models.TextChoices):
+        PENDING = 'PENDING', '승인대기'
+        APPROVED = 'APPROVED', '승인완료'
+        REJECTED = 'REJECTED', '거절됨'
+
+    request_id = models.BigAutoField(primary_key=True)
+
+    # 신청 상태 (PENDING → APPROVED/REJECTED)
+    status = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        default=Status.PENDING
+    )
+
+    # 신청 일시 (자동 생성)
+    requested_at = models.DateTimeField(auto_now_add=True)
+
+    # 처리 일시 (승인/거절 시점)
+    processed_at = models.DateTimeField(blank=True, null=True)
+
+    # 처리한 원무과 직원 (administration.Administration FK)
+    processed_by = models.ForeignKey(
+        'administration.Administration',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        db_column='processed_by_id'
+    )
+
+    # 신청한 앱 사용자 (patients.UserProfile FK)
+    profile = models.ForeignKey(
+        UserProfile,
+        on_delete=models.CASCADE,
+        db_column='profile_id'
+    )
+
+    # 승인 시 배정된 환자번호 (doctor.Patient.patient_id)
+    # 승인 완료 후 UserProfile.linked_patient_id에도 동일한 값이 저장됨
+    assigned_patient_id = models.CharField(
+        max_length=50,
+        blank=True,
+        null=True
+    )
+
+    class Meta:
+        db_table = 'app"."app_sync_request'
+        ordering = ['-requested_at']  # 최신 신청이 먼저 표시
+
+    def __str__(self):
+        return f"{self.profile.nickname} - {self.get_status_display()}"
