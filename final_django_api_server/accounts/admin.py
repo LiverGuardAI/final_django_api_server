@@ -41,3 +41,16 @@ class CustomUserAdmin(admin.ModelAdmin):
             'fields': ('is_active', 'is_staff', 'is_superuser')
         }),
     )
+
+from .models import DutySchedule
+
+@admin.register(DutySchedule)
+class DutyScheduleAdmin(admin.ModelAdmin):
+    """근무 일정 관리"""
+    change_list_template = 'admin/accounts/dutyschedule/change_list.html'
+    
+    list_display = ('schedule_id', 'user', 'work_role', 'start_time', 'end_time', 'shift_type', 'schedule_status')
+    list_filter = ('schedule_status', 'work_role', 'shift_type')
+    search_fields = ('user__username', 'user__first_name', 'user__last_name')
+    ordering = ('-start_time',)
+

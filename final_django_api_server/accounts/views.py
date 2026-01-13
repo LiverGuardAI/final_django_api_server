@@ -275,3 +275,89 @@ class LogoutView(APIView):
             {'message': '로그아웃 되었습니다.'},
             status=status.HTTP_200_OK
         )
+
+# admin 계정 내 근무 일정 관리 API
+from rest_framework import viewsets, status
+from rest_framework.decorators import action
+from rest_framework.response import Response
+from .models import DutySchedule
+from .serializers import DutyScheduleSerializer
+from django.utils import timezone
+
+from rest_framework.authentication import SessionAuthentication
+
+class DutyScheduleViewSet(viewsets.ModelViewSet):
+    queryset = DutySchedule.objects.all()
+    serializer_class = DutyScheduleSerializer
+    authentication_classes = [SessionAuthentication] # Admin 페이지 전용
+    
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        user_id = self.request.query_params.get('user_id')
+        start_date = self.request.query_params.get('start_date')
+        end_date = self.request.query_params.get('end_date')
+        
+        if user_id:
+            queryset = queryset.filter(user_id=user_id)
+        if start_date:
+            queryset = queryset.filter(start_time__date__gte=start_date)
+        if end_date:
+            queryset = queryset.filter(end_time__date__lte=end_date)
+            
+        return queryset
+
+    @action(detail=True, methods=['post'])
+    def confirm(self, request, pk=None):
+        schedule = self.get_object()
+        schedule.schedule_status = 'CONFIRMED'
+        schedule.save()
+        return Response({'status': 'schedule confirmed'})
+
+# 직원 리스트 조회 API
+from .models import CustomUser
+
+class StaffListView(APIView):
+    permission_classes = [AllowAny] # Or IsAuthenticated
+    authentication_classes = [SessionAuthentication] # Admin 페이지 전용
+
+    def get(self, request):
+        staff_list = []
+        
+        # 1. Doctors
+        from doctor.models import Doctor
+        doctors = Doctor.objects.select_related('user', 'department').all()
+        for doc in doctors:
+            staff_list.append({
+                'user_id': doc.user.user_id,
+                'name': doc.name,
+                'role': 'DOCTOR',
+                'dept_name': doc.department.dept_name if doc.department else 'Unknown'
+            })
+            
+        # 2. Radiologists
+        from radiology.models import Radiology
+        radios = Radiology.objects.select_related('user', 'department').all()
+        for rad in radios:
+            staff_list.append({
+                'user_id': rad.user.user_id,
+                'name': rad.name,
+                'role': 'RADIOLOGIST',
+                'dept_name': rad.department.dept_name if rad.department else 'Unknown'
+            })
+
+        # 3. Administration (Clerks)
+        from administration.models import Administration
+        admins = Administration.objects.select_related('user', 'department').all()
+        for adm in admins:
+            staff_list.append({
+                'user_id': adm.user.user_id,
+                'name': adm.name,
+                'role': 'CLERK',
+                'dept_name': adm.department.dept_name if adm.department else 'Unknown'
+            })
+        
+        # Sort by Dept Name then Role
+        staff_list.sort(key=lambda x: (x['dept_name'], x['role']))
+        
+        return Response(staff_list, status=status.HTTP_200_OK)
+

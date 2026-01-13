@@ -3,14 +3,24 @@ from channels.generic.websocket import AsyncWebsocketConsumer
 
 class ClinicConsumer(AsyncWebsocketConsumer):
     async def connect(self):
-        # 1. 프론트엔드가 연결하면 'clinic_dashboard' 그룹에 초대
-        self.group_name = 'clinic_dashboard'
+        import traceback
+        try:
+            print(f"DEBUG: WebSocket Connect attempted. User: {self.scope.get('user')}")
+            # 1. 프론트엔드가 연결하면 'clinic_dashboard' 그룹에 초대
+            self.group_name = 'clinic_dashboard'
 
-        await self.channel_layer.group_add(
-            self.group_name,
-            self.channel_name
-        )
-        await self.accept() # 연결 수락
+            await self.channel_layer.group_add(
+                self.group_name,
+                self.channel_name
+            )
+            print("DEBUG: Redis group_add successful")
+            
+            await self.accept() # 연결 수락
+            print("DEBUG: WebSocket accepted")
+        except Exception as e:
+            print(f"ERROR in WebSocket connect: {e}")
+            traceback.print_exc()
+            await self.close()
 
     async def disconnect(self, close_code):
         # 2. 연결 종료 시 그룹에서 제거

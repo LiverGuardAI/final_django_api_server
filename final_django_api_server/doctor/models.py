@@ -49,7 +49,6 @@ class ScheduleDoctor(models.Model):
     schedule_type = DoctorScheduleTypeField(choices=DoctorScheduleType.choices)
     start_time = models.TimeField()
     end_time = models.TimeField()
-    clinic_room = models.CharField(max_length=20, blank=True, null=True)
     notes = models.TextField(blank=True, null=True)
     is_available = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
