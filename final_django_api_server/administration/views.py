@@ -11,7 +11,7 @@ from .serializers import (
     EncounterSerializer,
     EncounterCreateSerializer,
 )
-from django.db.models import Q, Count
+from django.db.models import Q, Count, Subquery, OuterRef
 from datetime import date, datetime
 from .cache_manager import cache_manager
 from django.db import transaction
@@ -104,6 +104,18 @@ class PatientListView(APIView):
 
         # 환자 쿼리 (Patient 모델에는 doctor 필드가 없으므로 select_related 제거)
         patients = Patient.objects.all()
+
+        # 방문 횟수 및 최근 방문일 Annotate (N+1 방지)
+        # 1. 최근 방문일 (COMPLETED 상태인 최신 Encounter의 start_time)
+        last_visit_subquery = Encounter.objects.filter(
+            patient=OuterRef('pk'),
+            status=Encounter.Status.COMPLETED
+        ).order_by('-start_time').values('start_time')[:1]
+
+        patients = patients.annotate(
+            total_visits=Count('encounter', filter=Q(encounter__status=Encounter.Status.COMPLETED)),
+            last_visit=Subquery(last_visit_subquery)
+        )
 
         if search:
             # 커스텀 매니저 사용
@@ -576,7 +588,16 @@ class WaitingQueueView(APIView):
              updated_at__date=today
         )
 
-        queryset = Encounter.objects.filter(filter_condition).select_related('patient', 'assigned_doctor').order_by('state_entered_at')
+        # prefetch_related 추가 (Serializer N+1 방지)
+        queryset = Encounter.objects.filter(filter_condition)\
+            .select_related('patient', 'assigned_doctor')\
+            .prefetch_related(
+                'medical_records',          # MedicalRecord (related_name defined)
+                'laborder_set',             # LabOrder (Default: laborder_set)
+                'doctortoradiologyorder_set', # DoctorToRadiologyOrder (Default: doctortoradiologyorder_set)
+                'questionnaire'             # Questionnaire (1:1 related_name='questionnaire')
+            )\
+            .order_by('state_entered_at')
         
         if doctor_id:
              try:
@@ -636,7 +657,15 @@ class AdministrationWaitingQueueView(APIView):
         else:
             return Response({'error': 'Invalid view type'}, status=status.HTTP_400_BAD_REQUEST)
 
-        queryset = Encounter.objects.filter(filter_condition).select_related('patient', 'assigned_doctor').order_by('state_entered_at')
+        queryset = Encounter.objects.filter(filter_condition)\
+            .select_related('patient', 'assigned_doctor')\
+            .prefetch_related(
+                'medical_records',
+                'laborder_set',
+                'doctortoradiologyorder_set',
+                'questionnaire'
+            )\
+            .order_by('state_entered_at')
         
         serializer = EncounterSerializer(queryset, many=True)
 
