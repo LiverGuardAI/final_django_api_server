@@ -1,8 +1,7 @@
 from django.urls import path
 from .views import CreateSegmentationMaskView, SegmentationTaskStatusView, CreateFeatureExtractionView, FeatureExtractionTaskStatusView
 
-from .views import BentoMLHealthView, PredictStageView, PredictRelapseView, PredictSurvivalView, PredictAllView, PredictionTaskStatusView
-
+from .views import BentoMLHealthView, PredictStageView, PredictRelapseView, PredictSurvivalView, PredictAllView, PredictionTaskStatusView, search_drugs, DDIAnalysisView
 
 urlpatterns = [
     # AI Segmentation via Mosec
@@ -20,4 +19,6 @@ urlpatterns = [
     path('bentoml/predict/survival/', PredictSurvivalView.as_view(), name='predict_survival'),
     path('bentoml/predict/all/', PredictAllView.as_view(), name='predict_all'),
     path('bentoml/prediction/status/<str:task_id>/', PredictionTaskStatusView.as_view(), name='prediction_status'),
+    path('bentoml/drugs/search/', search_drugs, name='search_drugs'),
+    path('bentoml/ddi/analyze/', DDIAnalysisView.as_view(), name='ddi_analyze'),
 ]
