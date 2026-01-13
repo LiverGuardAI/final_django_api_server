@@ -218,7 +218,7 @@ class PatientRegistrationView(APIView):
         serializer = PatientSerializer(data=data)
 
         if serializer.is_valid():
-            patient = serializer.save(staff=request.user)
+            patient = serializer.save()
             return Response({
                 'message': '환자 등록 완료',
                 'patient': PatientSerializer(patient).data

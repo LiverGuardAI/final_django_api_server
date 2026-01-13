@@ -9,8 +9,6 @@ from datetime import date
 # ---------------------------------------------------------
 class PatientSerializer(serializers.ModelSerializer):
     """환자 정보 직렬화 (조회, 등록, 수정 통합)"""
-
-    staff = serializers.PrimaryKeyRelatedField(read_only=True)
     
     # Annotate Fields
     total_visits = serializers.IntegerField(read_only=True)
@@ -55,11 +53,6 @@ class PatientSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         """환자 생성 (POST)"""
-        # 1. 기본 상태 설정
-        # 1. 기본 상태 설정 (삭제: Patient 모델에 없는 필드)
-        pass
-
-        # 2. 나이 자동 계산
         if 'date_of_birth' in validated_data:
             validated_data['age'] = self._calculate_age(validated_data['date_of_birth'])
 
