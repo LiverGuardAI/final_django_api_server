@@ -485,7 +485,7 @@ class DoctorToRadiologyOrder(models.Model):
     encounter = models.ForeignKey('Encounter', on_delete=models.CASCADE, db_column='encounter_id', null=True, blank=True)
     doctor = models.ForeignKey('Doctor', on_delete=models.RESTRICT, db_column='doctor_id')
 
-class Meta:
+    class Meta:
         db_table = 'hospital"."doctor_to_radiology_orders'
 
 
