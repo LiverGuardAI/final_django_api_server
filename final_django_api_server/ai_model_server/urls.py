@@ -1,7 +1,7 @@
 from django.urls import path
 from .views import CreateSegmentationMaskView, SegmentationTaskStatusView, CreateFeatureExtractionView, FeatureExtractionTaskStatusView
 
-from .views import BentoMLHealthView, PredictStageView, PredictRelapseView, PredictSurvivalView, PredictAllView
+from .views import BentoMLHealthView, PredictStageView, PredictRelapseView, PredictSurvivalView, PredictAllView, PredictionTaskStatusView
 
 
 urlpatterns = [
@@ -15,8 +15,9 @@ urlpatterns = [
     # Health check
     path('health/', BentoMLHealthView.as_view(), name='bentoml_health'),
     
-    path('predict/stage/', PredictStageView.as_view(), name='predict_stage'),
-    path('predict/relapse/', PredictRelapseView.as_view(), name='predict_relapse'),
-    path('predict/survival/', PredictSurvivalView.as_view(), name='predict_survival'),
-    path('predict/all/', PredictAllView.as_view(), name='predict_all'),
+    path('bentoml/predict/stage/', PredictStageView.as_view(), name='predict_stage'),
+    path('bentoml/predict/relapse/', PredictRelapseView.as_view(), name='predict_relapse'),
+    path('bentoml/predict/survival/', PredictSurvivalView.as_view(), name='predict_survival'),
+    path('bentoml/predict/all/', PredictAllView.as_view(), name='predict_all'),
+    path('bentoml/prediction/status/<str:task_id>/', PredictionTaskStatusView.as_view(), name='prediction_status'),
 ]

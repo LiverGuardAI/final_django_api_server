@@ -2,6 +2,26 @@ from celery import shared_task
 import requests
 import os
 import msgpack
+import numpy as np
+from django.conf import settings
+
+
+def _convert_numpy_types(obj):
+    """
+    Recursively convert NumPy types to Python native types
+    """
+    if isinstance(obj, np.integer):
+        return int(obj)
+    elif isinstance(obj, np.floating):
+        return float(obj)
+    elif isinstance(obj, np.ndarray):
+        return obj.tolist()
+    elif isinstance(obj, dict):
+        return {key: _convert_numpy_types(value) for key, value in obj.items()}
+    elif isinstance(obj, list):
+        return [_convert_numpy_types(item) for item in obj]
+    else:
+        return obj
 
 
 def _get_series_instance_uid(orthanc_base_url, orthanc_series_id):
@@ -241,4 +261,417 @@ def process_feature_extraction(self, series_instance_uid):
             'seriesinstanceuid': series_instance_uid,
             'error': str(e),
             'message': 'Feature extraction failed'
+        }
+
+
+# ========================
+# BentoML Prediction Tasks
+# ========================
+
+@shared_task(bind=True, name='ai_model_server.process_stage_prediction', max_retries=0)
+def process_stage_prediction(self, clinical, series_uid):
+    """
+    Task 1: 병기 예측 (Stage Prediction)
+
+    Args:
+        clinical: Clinical features (11 dimensions)
+        series_uid: DICOM SeriesInstanceUID for CT feature extraction
+
+    Returns:
+        Prediction result
+    """
+    from .models import RadioFeatureVector
+
+    bentoml_url = os.getenv('BENTOML_BASE_URL', 'http://host.docker.internal:3001')
+    endpoint = f'{bentoml_url}/predict_stage'
+
+    try:
+        self.update_state(
+            state='PROGRESS',
+            meta={
+                'step': 'Fetching CT feature vector',
+                'series_uid': series_uid,
+                'progress': 20
+            }
+        )
+
+        # RadioFeatureVector에서 series_uid로 feature_vector 조회
+        try:
+            radio_vector = RadioFeatureVector.objects.filter(series_id=series_uid).latest('created_at')
+            ct = list(radio_vector.feature_vector) if radio_vector.feature_vector is not None else []
+            ct = _convert_numpy_types(ct)
+            ct = _convert_numpy_types(ct)
+            ct = _convert_numpy_types(ct)
+            ct = _convert_numpy_types(ct)
+        except RadioFeatureVector.DoesNotExist:
+            return {
+                'status': 'failed',
+                'error': f'No feature vector found for series_uid: {series_uid}',
+                'message': 'Feature vector not found'
+            }
+
+        if len(ct) != 512:
+            return {
+                'status': 'failed',
+                'error': f'ct feature vector must have 512 dimensions, got {len(ct)}',
+                'message': 'Invalid feature vector dimension'
+            }
+
+        self.update_state(
+            state='PROGRESS',
+            meta={
+                'step': 'Sending request to BentoML',
+                'progress': 50
+            }
+        )
+
+        # BentoML API 호출
+        response = requests.post(
+            endpoint,
+            json={
+                'data': {
+                    'clinical': _convert_numpy_types(clinical),
+                    'ct_features': ct,
+                }
+            },
+            timeout=30
+        )
+        if not response.ok:
+            return {
+                'status': 'failed',
+                'error': f'{response.status_code} Client Error: {response.reason} for url: {endpoint}',
+                'details': response.text,
+                'message': 'Stage prediction failed'
+            }
+        result = response.json()
+
+        # Convert NumPy types to Python native types
+        result = _convert_numpy_types(result)
+
+        self.update_state(
+            state='PROGRESS',
+            meta={
+                'step': 'Prediction completed',
+                'progress': 90
+            }
+        )
+
+        return {
+            'status': 'success',
+            'result': result,
+            'message': 'Stage prediction completed successfully'
+        }
+
+    except Exception as e:
+        print(f"Error in stage prediction: {str(e)}")
+        return {
+            'status': 'failed',
+            'error': str(e),
+            'message': 'Stage prediction failed'
+        }
+
+
+@shared_task(bind=True, name='ai_model_server.process_relapse_prediction', max_retries=0)
+def process_relapse_prediction(self, clinical, mrna, series_uid):
+    """
+    Task 2: 재발 예측 (Relapse Prediction)
+
+    Args:
+        clinical: Clinical features (11 dimensions)
+        mrna: mRNA pathway scores (20 dimensions)
+        series_uid: DICOM SeriesInstanceUID for CT feature extraction
+
+    Returns:
+        Prediction result
+    """
+    from .models import RadioFeatureVector
+
+    bentoml_url = os.getenv('BENTOML_BASE_URL', 'http://host.docker.internal:3001')
+    endpoint = f'{bentoml_url}/predict_relapse'
+
+    try:
+        self.update_state(
+            state='PROGRESS',
+            meta={
+                'step': 'Fetching CT feature vector',
+                'series_uid': series_uid,
+                'progress': 20
+            }
+        )
+
+        # RadioFeatureVector에서 series_uid로 feature_vector 조회
+        try:
+            radio_vector = RadioFeatureVector.objects.filter(series_id=series_uid).latest('created_at')
+            ct = list(radio_vector.feature_vector) if radio_vector.feature_vector is not None else []
+            ct = _convert_numpy_types(ct)
+        except RadioFeatureVector.DoesNotExist:
+            return {
+                'status': 'failed',
+                'error': f'No feature vector found for series_uid: {series_uid}',
+                'message': 'Feature vector not found'
+            }
+
+        if len(ct) != 512:
+            return {
+                'status': 'failed',
+                'error': f'ct feature vector must have 512 dimensions, got {len(ct)}',
+                'message': 'Invalid feature vector dimension'
+            }
+
+        self.update_state(
+            state='PROGRESS',
+            meta={
+                'step': 'Sending request to BentoML',
+                'progress': 50
+            }
+        )
+
+        # BentoML API 호출
+        response = requests.post(
+            endpoint,
+            json={
+                'data': {
+                    'clinical': _convert_numpy_types(clinical),
+                    'mrna': _convert_numpy_types(mrna),
+                    'ct_features': ct,
+                }
+            },
+            timeout=30
+        )
+        if not response.ok:
+            return {
+                'status': 'failed',
+                'error': f'{response.status_code} Client Error: {response.reason} for url: {endpoint}',
+                'details': response.text,
+                'message': 'Relapse prediction failed'
+            }
+        result = response.json()
+
+        # Convert NumPy types to Python native types
+        result = _convert_numpy_types(result)
+
+        self.update_state(
+            state='PROGRESS',
+            meta={
+                'step': 'Prediction completed',
+                'progress': 90
+            }
+        )
+
+        return {
+            'status': 'success',
+            'result': result,
+            'message': 'Relapse prediction completed successfully'
+        }
+
+    except Exception as e:
+        print(f"Error in relapse prediction: {str(e)}")
+        return {
+            'status': 'failed',
+            'error': str(e),
+            'message': 'Relapse prediction failed'
+        }
+
+
+@shared_task(bind=True, name='ai_model_server.process_survival_prediction', max_retries=0)
+def process_survival_prediction(self, clinical, mrna, series_uid):
+    """
+    Task 3: 생존 분석 (Survival Analysis)
+
+    Args:
+        clinical: Clinical features (11 dimensions)
+        mrna: mRNA pathway scores (20 dimensions)
+        series_uid: DICOM SeriesInstanceUID for CT feature extraction
+
+    Returns:
+        Prediction result
+    """
+    from .models import RadioFeatureVector
+
+    bentoml_url = os.getenv('BENTOML_BASE_URL', 'http://host.docker.internal:3001')
+    endpoint = f'{bentoml_url}/predict_survival'
+
+    try:
+        self.update_state(
+            state='PROGRESS',
+            meta={
+                'step': 'Fetching CT feature vector',
+                'series_uid': series_uid,
+                'progress': 20
+            }
+        )
+
+        # RadioFeatureVector에서 series_uid로 feature_vector 조회
+        try:
+            radio_vector = RadioFeatureVector.objects.filter(series_id=series_uid).latest('created_at')
+            ct = list(radio_vector.feature_vector) if radio_vector.feature_vector is not None else []
+            ct = _convert_numpy_types(ct)
+        except RadioFeatureVector.DoesNotExist:
+            return {
+                'status': 'failed',
+                'error': f'No feature vector found for series_uid: {series_uid}',
+                'message': 'Feature vector not found'
+            }
+
+        if len(ct) != 512:
+            return {
+                'status': 'failed',
+                'error': f'ct feature vector must have 512 dimensions, got {len(ct)}',
+                'message': 'Invalid feature vector dimension'
+            }
+
+        self.update_state(
+            state='PROGRESS',
+            meta={
+                'step': 'Sending request to BentoML',
+                'progress': 50
+            }
+        )
+
+        # BentoML API 호출
+        response = requests.post(
+            endpoint,
+            json={
+                'data': {
+                    'clinical': _convert_numpy_types(clinical),
+                    'mrna': _convert_numpy_types(mrna),
+                    'ct_features': ct,
+                }
+            },
+            timeout=30
+        )
+        if not response.ok:
+            return {
+                'status': 'failed',
+                'error': f'{response.status_code} Client Error: {response.reason} for url: {endpoint}',
+                'details': response.text,
+                'message': 'Survival prediction failed'
+            }
+        result = response.json()
+
+        # Convert NumPy types to Python native types
+        result = _convert_numpy_types(result)
+
+        self.update_state(
+            state='PROGRESS',
+            meta={
+                'step': 'Prediction completed',
+                'progress': 90
+            }
+        )
+
+        return {
+            'status': 'success',
+            'result': result,
+            'message': 'Survival prediction completed successfully'
+        }
+
+    except Exception as e:
+        print(f"Error in survival prediction: {str(e)}")
+        return {
+            'status': 'failed',
+            'error': str(e),
+            'message': 'Survival prediction failed'
+        }
+
+
+@shared_task(bind=True, name='ai_model_server.process_all_predictions', max_retries=0)
+def process_all_predictions(self, clinical, mrna, series_uid):
+    """
+    전체 예측 (Task 1, 2, 3)
+
+    Args:
+        clinical: Clinical features (11 dimensions)
+        mrna: mRNA pathway scores (20 dimensions)
+        series_uid: DICOM SeriesInstanceUID for CT feature extraction
+
+    Returns:
+        Combined prediction results
+    """
+    from .models import RadioFeatureVector
+
+    bentoml_url = os.getenv('BENTOML_BASE_URL', 'http://host.docker.internal:3001')
+    endpoint = f'{bentoml_url}/predict'
+
+    try:
+        self.update_state(
+            state='PROGRESS',
+            meta={
+                'step': 'Fetching CT feature vector',
+                'series_uid': series_uid,
+                'progress': 20
+            }
+        )
+
+        # RadioFeatureVector에서 series_uid로 feature_vector 조회
+        try:
+            radio_vector = RadioFeatureVector.objects.filter(series_id=series_uid).latest('created_at')
+            ct = list(radio_vector.feature_vector) if radio_vector.feature_vector is not None else []
+            ct = _convert_numpy_types(ct)
+        except RadioFeatureVector.DoesNotExist:
+            return {
+                'status': 'failed',
+                'error': f'No feature vector found for series_uid: {series_uid}',
+                'message': 'Feature vector not found'
+            }
+
+        if len(ct) != 512:
+            return {
+                'status': 'failed',
+                'error': f'ct feature vector must have 512 dimensions, got {len(ct)}',
+                'message': 'Invalid feature vector dimension'
+            }
+
+        self.update_state(
+            state='PROGRESS',
+            meta={
+                'step': 'Sending request to BentoML',
+                'progress': 50
+            }
+        )
+
+        # BentoML API 호출
+        response = requests.post(
+            endpoint,
+            json={
+                'data': {
+                    'clinical': _convert_numpy_types(clinical),
+                    'mrna': _convert_numpy_types(mrna),
+                    'ct_features': ct,
+                }
+            },
+            timeout=60
+        )
+        if not response.ok:
+            return {
+                'status': 'failed',
+                'error': f'{response.status_code} Client Error: {response.reason} for url: {endpoint}',
+                'details': response.text,
+                'message': 'All predictions failed'
+            }
+        result = response.json()
+
+        # Convert NumPy types to Python native types
+        result = _convert_numpy_types(result)
+
+        self.update_state(
+            state='PROGRESS',
+            meta={
+                'step': 'All predictions completed',
+                'progress': 90
+            }
+        )
+
+        return {
+            'status': 'success',
+            'result': result,
+            'message': 'All predictions completed successfully'
+        }
+
+    except Exception as e:
+        print(f"Error in all predictions: {str(e)}")
+        return {
+            'status': 'failed',
+            'error': str(e),
+            'message': 'Predictions failed'
         }

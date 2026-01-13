@@ -2,7 +2,14 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import AllowAny
-from .tasks import process_segmentation, process_feature_extraction
+from .tasks import (
+    process_segmentation,
+    process_feature_extraction,
+    process_stage_prediction,
+    process_relapse_prediction,
+    process_survival_prediction,
+    process_all_predictions
+)
 
 import requests
 from django.conf import settings
@@ -216,108 +223,208 @@ class BentoMLHealthView(APIView):
             
 class PredictStageView(APIView):
     """
-    Task 1: 병기 예측
-    
-    POST /api/predict/stage/
-    Body: {"clinical": [...], "ct": [...]}
+    Task 1: 병기 예측 (Celery Task 사용)
+
+    POST /api/ai/bentoml/predict/stage/
+    Body: {"clinical": [11 features], "series_uid": "..."}
+
+    Returns: {"task_id": "...", "status": "pending"}
     """
     permission_classes = [AllowAny]
-    
+
     def post(self, request):
         try:
             clinical = request.data.get('clinical', [])
-            ct = request.data.get('ct', [])
-            
+            series_uid = request.data.get('series_uid') or request.data.get('seriesinstanceuid')
+
             if len(clinical) != 11:
                 return Response(
                     {"error": f"clinical must have 11 features, got {len(clinical)}"},
                     status=status.HTTP_400_BAD_REQUEST
                 )
-            if len(ct) != 512:
+
+            if not series_uid:
                 return Response(
-                    {"error": f"ct must have 512 features, got {len(ct)}"},
+                    {"error": "series_uid or seriesinstanceuid is required"},
                     status=status.HTTP_400_BAD_REQUEST
                 )
-            
-            url = f"{settings.BENTOML_SERVER_URL}/predict_stage"
-            resp = requests.post(url, json={"clinical": clinical, "ct": ct}, timeout=30)
-            return Response(resp.json(), status=resp.status_code)
-            
+
+            # Celery task 시작
+            task = process_stage_prediction.delay(clinical, series_uid)
+
+            return Response({
+                'task_id': task.id,
+                'status': 'pending',
+                'message': 'Stage prediction task started',
+                'series_uid': series_uid
+            }, status=status.HTTP_202_ACCEPTED)
+
         except Exception as e:
             return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 class PredictRelapseView(APIView):
     """
-    Task 2: 조기 재발 예측
-    
-    POST /api/predict/relapse/
-    Body: {"clinical": [...], "mrna": [...], "ct": [...]}
+    Task 2: 조기 재발 예측 (Celery Task 사용)
+
+    POST /api/ai/bentoml/predict/relapse/
+    Body: {"clinical": [11 features], "mrna": [20 features], "series_uid": "..."}
+
+    Returns: {"task_id": "...", "status": "pending"}
     """
     permission_classes = [AllowAny]
-    
+
     def post(self, request):
         try:
             clinical = request.data.get('clinical', [])
             mrna = request.data.get('mrna', [])
-            ct = request.data.get('ct', [])
-            
+            series_uid = request.data.get('series_uid') or request.data.get('seriesinstanceuid')
+
             if len(clinical) != 11:
                 return Response({"error": "clinical must have 11 features"}, status=400)
             if len(mrna) != 20:
                 return Response({"error": "mrna must have 20 features"}, status=400)
-            if len(ct) != 512:
-                return Response({"error": "ct must have 512 features"}, status=400)
-            
-            url = f"{settings.BENTOML_SERVER_URL}/predict_relapse"
-            resp = requests.post(url, json={"clinical": clinical, "mrna": mrna, "ct": ct}, timeout=30)
-            return Response(resp.json(), status=resp.status_code)
-            
+
+            if not series_uid:
+                return Response(
+                    {"error": "series_uid or seriesinstanceuid is required"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # Celery task 시작
+            task = process_relapse_prediction.delay(clinical, mrna, series_uid)
+
+            return Response({
+                'task_id': task.id,
+                'status': 'pending',
+                'message': 'Relapse prediction task started',
+                'series_uid': series_uid
+            }, status=status.HTTP_202_ACCEPTED)
+
         except Exception as e:
             return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 class PredictSurvivalView(APIView):
     """
-    Task 3: 생존 분석
-    
-    POST /api/predict/survival/
-    Body: {"clinical": [...], "mrna": [...], "ct": [...]}
+    Task 3: 생존 분석 (Celery Task 사용)
+
+    POST /api/ai/bentoml/predict/survival/
+    Body: {"clinical": [11 features], "mrna": [20 features], "series_uid": "..."}
+
+    Returns: {"task_id": "...", "status": "pending"}
     """
     permission_classes = [AllowAny]
-    
+
     def post(self, request):
         try:
             clinical = request.data.get('clinical', [])
             mrna = request.data.get('mrna', [])
-            ct = request.data.get('ct', [])
-            
-            url = f"{settings.BENTOML_SERVER_URL}/predict_survival"
-            resp = requests.post(url, json={"clinical": clinical, "mrna": mrna, "ct": ct}, timeout=30)
-            return Response(resp.json(), status=resp.status_code)
-            
+            series_uid = request.data.get('series_uid') or request.data.get('seriesinstanceuid')
+
+            if len(clinical) != 11:
+                return Response({"error": f"clinical must have 11 features, got {len(clinical)}"}, status=400)
+            if len(mrna) != 20:
+                return Response({"error": f"mrna must have 20 features, got {len(mrna)}"}, status=400)
+
+            if not series_uid:
+                return Response(
+                    {"error": "series_uid or seriesinstanceuid is required"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # Celery task 시작
+            task = process_survival_prediction.delay(clinical, mrna, series_uid)
+
+            return Response({
+                'task_id': task.id,
+                'status': 'pending',
+                'message': 'Survival prediction task started',
+                'series_uid': series_uid
+            }, status=status.HTTP_202_ACCEPTED)
+
         except Exception as e:
             return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 class PredictAllView(APIView):
     """
-    전체 예측 (Task 1, 2, 3)
-    
-    POST /api/predict/all/
-    Body: {"clinical": [...], "mrna": [...], "ct": [...]}
+    전체 예측 (Task 1, 2, 3) - Celery Task 사용
+
+    POST /api/ai/bentoml/predict/all/
+    Body: {"clinical": [11 features], "mrna": [20 features], "series_uid": "..."}
+
+    Returns: {"task_id": "...", "status": "pending"}
     """
     permission_classes = [AllowAny]
-    
+
     def post(self, request):
         try:
             clinical = request.data.get('clinical', [])
             mrna = request.data.get('mrna', [])
-            ct = request.data.get('ct', [])
-            
-            url = f"{settings.BENTOML_SERVER_URL}/predict_all"
-            resp = requests.post(url, json={"clinical": clinical, "mrna": mrna, "ct": ct}, timeout=60)
-            return Response(resp.json(), status=resp.status_code)
-            
+            series_uid = request.data.get('series_uid') or request.data.get('seriesinstanceuid')
+
+            if not series_uid:
+                return Response(
+                    {"error": "series_uid or seriesinstanceuid is required"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # Celery task 시작
+            task = process_all_predictions.delay(clinical, mrna, series_uid)
+
+            return Response({
+                'task_id': task.id,
+                'status': 'pending',
+                'message': 'All predictions task started',
+                'series_uid': series_uid
+            }, status=status.HTTP_202_ACCEPTED)
+
         except Exception as e:
             return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class PredictionTaskStatusView(APIView):
+    """
+    BentoML 예측 Task의 상태를 조회하는 API
+
+    GET /api/ai/bentoml/prediction/status/<task_id>/
+
+    Response:
+    {
+        "task_id": "...",
+        "status": "PENDING|PROGRESS|SUCCESS|FAILURE",
+        "result": {...} or "error": "..."
+    }
+    """
+    permission_classes = [AllowAny]
+
+    def get(self, request, task_id):
+        try:
+            from celery.result import AsyncResult
+
+            task_result = AsyncResult(task_id)
+
+            response_data = {
+                'task_id': task_id,
+                'status': task_result.state,
+            }
+
+            if task_result.state == 'PENDING':
+                response_data['message'] = 'Task is waiting to be processed'
+            elif task_result.state == 'PROGRESS':
+                response_data['progress'] = task_result.info
+            elif task_result.state == 'SUCCESS':
+                response_data['result'] = task_result.result
+            elif task_result.state == 'FAILURE':
+                response_data['error'] = str(task_result.info)
+            else:
+                response_data['message'] = f'Task state: {task_result.state}'
+
+            return Response(response_data, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            return Response({
+                'error': 'Failed to fetch task status',
+                'details': str(e)
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
