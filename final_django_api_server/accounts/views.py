@@ -313,6 +313,31 @@ class DutyScheduleViewSet(viewsets.ModelViewSet):
         schedule.save()
         return Response({'status': 'schedule confirmed'})
 
+class PublicDutyScheduleView(APIView):
+    """
+    원무과/프론트엔드용 근무 일정 조회 (Read-Only)
+    """
+    permission_classes = [AllowAny]  # 필요에 따라 IsAuthenticated로 변경
+    
+    def get(self, request):
+        start_date = request.query_params.get('start_date')
+        end_date = request.query_params.get('end_date')
+        doctor_id = request.query_params.get('doctor_id')
+        
+        queryset = DutySchedule.objects.select_related('user').all()
+        
+        if start_date:
+            # 일정이 start_date 이후에 끝나야 함 (start_date와 겹치거나 그 이후)
+            queryset = queryset.filter(end_time__date__gte=start_date)
+        if end_date:
+            # 일정이 end_date 이전에 시작해야 함 (end_date와 겹치거나 그 이전)
+            queryset = queryset.filter(start_time__date__lte=end_date)
+        if doctor_id:
+            queryset = queryset.filter(user_id=doctor_id)
+            
+        serializer = DutyScheduleSerializer(queryset, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
 # 직원 리스트 조회 API
 from .models import CustomUser
 
