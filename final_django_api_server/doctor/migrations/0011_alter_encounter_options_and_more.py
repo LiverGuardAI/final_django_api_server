@@ -17,8 +17,6 @@ class Migration(migrations.Migration):
         migrations.AlterModelTable(
             name='doctortoradiologyorder',
             table='hospital"."doctor_to_radiology_orders',
-            name="encounter",
-            options={},
         ),
         migrations.RemoveField(
             model_name="scheduledoctor",
