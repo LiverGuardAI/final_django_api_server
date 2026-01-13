@@ -56,7 +56,8 @@ class PatientSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         """환자 생성 (POST)"""
         # 1. 기본 상태 설정
-        validated_data['current_status'] = 'REGISTERED'
+        # 1. 기본 상태 설정 (삭제: Patient 모델에 없는 필드)
+        pass
 
         # 2. 나이 자동 계산
         if 'date_of_birth' in validated_data:

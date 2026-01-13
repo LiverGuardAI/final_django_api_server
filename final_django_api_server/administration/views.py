@@ -613,7 +613,8 @@ class WaitingQueueView(APIView):
 
         # Redis에 5초간 캐싱
         import json
-        cache_manager.redis_client.setex(cache_key, 5, json.dumps(queue_data))
+        from django.core.serializers.json import DjangoJSONEncoder
+        cache_manager.redis_client.setex(cache_key, 5, json.dumps(queue_data, cls=DjangoJSONEncoder))
 
         return Response({
             'success': True,
