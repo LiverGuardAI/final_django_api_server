@@ -2,6 +2,7 @@
 from rest_framework import serializers
 from .models import UserProfile, AppSyncRequest
 from django.contrib.auth.hashers import make_password
+from doctor.models import Doctor
 
 
 class SignupSerializer(serializers.ModelSerializer):
@@ -82,3 +83,44 @@ class AppSyncRequestSerializer(serializers.ModelSerializer):
             'processed_at',
             'processed_by',
         ]
+
+
+# 진료과 목록 Serializer
+class DepartmentSerializer(serializers.Serializer):
+    """진료과 목록"""
+    department_name = serializers.CharField()
+
+
+# 의사 목록 Serializer
+class DoctorListSerializer(serializers.ModelSerializer):
+    """의사 목록 (앱용)"""
+    specialty = serializers.CharField(source='department.dept_name', read_only=True)
+    doctor_name = serializers.CharField(source='name', read_only=True)
+
+    class Meta:
+        model = Doctor
+        fields = ['doctor_id', 'doctor_name', 'specialty', 'phone']
+
+
+# 예약 생성 Serializer
+class AppointmentCreateSerializer(serializers.Serializer):
+    """당일 예약 생성 (앱용)"""
+    profile_id = serializers.IntegerField(required=True)
+    doctor_id = serializers.IntegerField(required=True)
+    notes = serializers.CharField(required=False, allow_blank=True)
+    
+    def validate_profile_id(self, value):
+        """프로필 검증"""
+        try:
+            profile = UserProfile.objects.get(profile_id=value)
+            if not profile.is_verified or not profile.linked_patient_id:
+                raise serializers.ValidationError("병원 연동이 필요합니다.")
+            return value
+        except UserProfile.DoesNotExist:
+            raise serializers.ValidationError("존재하지 않는 프로필입니다.")
+    
+    def validate_doctor_id(self, value):
+        """의사 검증"""
+        if not Doctor.objects.filter(doctor_id=value).exists():
+            raise serializers.ValidationError("존재하지 않는 의사입니다.")
+        return value

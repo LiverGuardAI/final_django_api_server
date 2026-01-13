@@ -15,4 +15,12 @@ urlpatterns = [
     path('app-sync-requests/<int:request_id>/approve/', views.app_sync_request_approve, name='app-sync-request-approve'),
     path('app-sync-requests/<int:request_id>/reject/', views.app_sync_request_reject, name='app-sync-request-reject'),
     path('app-sync-requests/status/<int:profile_id>/', views.app_sync_request_status, name='app-sync-request-status'),
+    
+    # 진료 예약 관련 API
+    path('departments/', views.get_departments, name='get-departments'),
+    path('doctors/', views.get_doctors, name='get-doctors'),
+    path('appointments/', views.create_appointment, name='create-appointment'),
+    path('appointments/list/', views.get_appointments, name='get-appointments'),
+    path('appointments/<int:appointment_id>/approve/', views.approve_appointment, name='approve-appointment'),
+    path('appointments/<int:appointment_id>/reject/', views.reject_appointment, name='reject-appointment'),
 ]

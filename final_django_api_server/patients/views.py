@@ -541,3 +541,344 @@ def app_sync_request_status(request, profile_id):
             "success": False,
             "message": str(e)
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+# ========== 진료 예약 관련 API ==========
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def get_departments(request):
+    """
+    진료과 목록 조회 API
+    
+    GET /api/patients/departments/
+    """
+    from accounts.models import Department
+    
+    # DB에서 특정 진료과만 조회 (소화기내과, 영상의학과)
+    departments = Department.objects.filter(dept_name__in=['소화기내과', '영상의학과']).order_by('dept_name')
+    
+    department_list = [{'department_name': dept.dept_name} for dept in departments]
+    
+    return Response({
+        'success': True,
+        'departments': department_list
+    }, status=status.HTTP_200_OK)
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def get_doctors(request):
+    """
+    의사 목록 조회 API (진료과별)
+    
+    GET /api/patients/doctors/?department=소화기내과
+    """
+    from doctor.models import Doctor
+    from .serializers import DoctorListSerializer
+    
+    department = request.query_params.get('department', None)
+    
+    if not department:
+        return Response({
+            'success': False,
+            'message': '진료과를 선택해주세요.'
+        }, status=status.HTTP_400_BAD_REQUEST)
+    
+    # 해당 진료과의 의사 목록 조회
+    doctors = Doctor.objects.filter(department__dept_name=department).select_related('department').order_by('name')
+    
+    if not doctors.exists():
+        return Response({
+            'success': False,
+            'message': '해당 진료과에 의사가 없습니다.'
+        }, status=status.HTTP_404_NOT_FOUND)
+    
+    serializer = DoctorListSerializer(doctors, many=True)
+    
+    return Response({
+        'success': True,
+        'doctors': serializer.data
+    }, status=status.HTTP_200_OK)
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def create_appointment(request):
+    """
+    당일 예약 생성 API (앱 전용)
+    
+    POST /api/patients/appointments/
+    {
+        "profile_id": 1,
+        "doctor_id": 3,
+        "notes": "복통"
+    }
+    """
+    from doctor.models import Doctor, Patient, Appointment
+    from .serializers import AppointmentCreateSerializer
+    
+    serializer = AppointmentCreateSerializer(data=request.data)
+    
+    if not serializer.is_valid():
+        return Response({
+            'success': False,
+            'message': '입력 데이터가 올바르지 않습니다.',
+            'errors': serializer.errors
+        }, status=status.HTTP_400_BAD_REQUEST)
+    
+    profile_id = serializer.validated_data['profile_id']
+    doctor_id = serializer.validated_data['doctor_id']
+    notes = serializer.validated_data.get('notes', '')
+    
+    # 1. UserProfile 조회
+    try:
+        profile = UserProfile.objects.get(profile_id=profile_id)
+    except UserProfile.DoesNotExist:
+        return Response({
+            'success': False,
+            'message': '존재하지 않는 사용자입니다.'
+        }, status=status.HTTP_404_NOT_FOUND)
+    
+    # 2. 병원 연동 확인
+    if not profile.is_verified or not profile.linked_patient_id:
+        return Response({
+            'success': False,
+            'message': '병원 연동이 필요합니다. 마이페이지에서 연동을 진행해주세요.'
+        }, status=status.HTTP_400_BAD_REQUEST)
+    
+    # 3. Patient 조회
+    try:
+        patient = Patient.objects.get(patient_id=profile.linked_patient_id)
+    except Patient.DoesNotExist:
+        return Response({
+            'success': False,
+            'message': '연동된 환자 정보를 찾을 수 없습니다.'
+        }, status=status.HTTP_404_NOT_FOUND)
+    
+    # 4. Doctor 조회
+    try:
+        doctor = Doctor.objects.get(doctor_id=doctor_id)
+    except Doctor.DoesNotExist:
+        return Response({
+            'success': False,
+            'message': '존재하지 않는 의사입니다.'
+        }, status=status.HTTP_404_NOT_FOUND)
+    
+    # 5. 당일 예약 생성
+    today = date.today()
+    from datetime import time
+    
+    # 당일 예약 시간은 현재 시각 기준 + 10분으로 설정
+    from datetime import datetime, timedelta
+    now = datetime.now()
+    appointment_time = (now + timedelta(minutes=10)).time()
+    
+    try:
+        appointment = Appointment.objects.create(
+            patient=patient,
+            doctor=doctor,
+            appointment_date=today,
+            appointment_time=appointment_time,
+            appointment_type='당일예약',
+            status='대기',
+            department=doctor.department.dept_name,
+            notes=notes
+        )
+        
+        return Response({
+            'success': True,
+            'message': '예약이 완료되었습니다.',
+            'appointment': {
+                'appointment_id': appointment.appointment_id,
+                'appointment_date': appointment.appointment_date.isoformat(),
+                'appointment_time': appointment.appointment_time.strftime('%H:%M'),
+                'doctor_name': doctor.name,
+                'department': doctor.department.dept_name,
+                'status': appointment.status
+            }
+        }, status=status.HTTP_201_CREATED)
+        
+    except Exception as e:
+        return Response({
+            'success': False,
+            'message': f'예약 생성 중 오류가 발생했습니다: {str(e)}'
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def get_appointments(request):
+    """
+    예약 목록 조회 API (원무과용)
+    
+    GET /api/patients/appointments/list/?status=대기
+    """
+    from doctor.models import Appointment
+    
+    status_filter = request.query_params.get('status', None)
+    
+    appointments = Appointment.objects.select_related('patient', 'doctor').order_by('-created_at')
+    
+    if status_filter:
+        appointments = appointments.filter(status=status_filter)
+    
+    # 예약 목록 직렬화
+    appointment_list = []
+    for appt in appointments:
+        appointment_list.append({
+            'appointment_id': appt.appointment_id,
+            'appointment_date': appt.appointment_date.isoformat(),
+            'appointment_time': appt.appointment_time.strftime('%H:%M'),
+            'appointment_type': appt.appointment_type,
+            'status': appt.status,
+            'department': appt.department,
+            'notes': appt.notes,
+            'patient': {
+                'patient_id': appt.patient.patient_id,
+                'name': appt.patient.name,
+                'phone': appt.patient.phone,
+            },
+            'doctor': {
+                'doctor_id': appt.doctor.doctor_id if appt.doctor else None,
+                'doctor_name': appt.doctor.name if appt.doctor else None,
+            } if appt.doctor else None,
+            'created_at': appt.created_at.isoformat(),
+        })
+    
+    return Response({
+        'success': True,
+        'appointments': appointment_list,
+        'count': len(appointment_list),
+    }, status=status.HTTP_200_OK)
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def approve_appointment(request, appointment_id):
+    """
+    예약 승인 API (원무과용)
+
+    POST /api/patients/appointments/{appointment_id}/approve/
+
+    워크플로우:
+    1. Appointment 조회
+    2. Encounter 생성 (진료 대기열에 추가)
+    3. Appointment 상태를 '예약완료'로 변경
+    """
+    from doctor.models import Appointment, Encounter
+    from datetime import datetime
+
+    try:
+        appointment = Appointment.objects.select_related('patient', 'doctor').get(appointment_id=appointment_id)
+    except Appointment.DoesNotExist:
+        return Response({
+            'success': False,
+            'message': '존재하지 않는 예약입니다.'
+        }, status=status.HTTP_404_NOT_FOUND)
+
+    # 이미 처리된 예약인지 확인
+    if appointment.status != '대기':
+        return Response({
+            'success': False,
+            'message': f'이미 처리된 예약입니다. (현재 상태: {appointment.status})'
+        }, status=status.HTTP_400_BAD_REQUEST)
+
+    # Encounter 생성 (진료 대기열에 추가)
+    try:
+        encounter = Encounter.objects.create(
+            patient=appointment.patient,
+            doctor=appointment.doctor,
+            status='IN_PROGRESS',  # FHIR 상태
+            workflow_state='WAITING_CLINIC',  # 진료 대기
+            encounter_date=appointment.appointment_date,
+            scheduled_time=datetime.combine(appointment.appointment_date, appointment.appointment_time),
+            visit_reason=appointment.notes or '당일 예약',
+        )
+
+        # 예약 상태를 '예약완료'로 변경
+        appointment.status = '예약완료'
+        appointment.save()
+
+        return Response({
+            'success': True,
+            'message': '예약이 승인되었습니다. 환자가 진료 대기열에 추가되었습니다.',
+            'encounter_id': encounter.encounter_id,
+            'appointment': {
+                'appointment_id': appointment.appointment_id,
+                'status': appointment.status,
+                'patient_name': appointment.patient.name,
+                'doctor_name': appointment.doctor.name if appointment.doctor else None,
+                'department': appointment.department,
+                'appointment_date': appointment.appointment_date.isoformat(),
+                'appointment_time': appointment.appointment_time.strftime('%H:%M'),
+            },
+        }, status=status.HTTP_200_OK)
+        
+    except Exception as e:
+        return Response({
+            'success': False,
+            'message': f'예약 승인 중 오류가 발생했습니다: {str(e)}'
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def reject_appointment(request, appointment_id):
+    """
+    예약 거절 API (원무과용)
+
+    POST /api/patients/appointments/{appointment_id}/reject/
+    {
+        "reason": "진료 불가"
+    }
+
+    워크플로우:
+    1. Appointment 조회
+    2. 거절 사유를 notes에 추가
+    3. Appointment 상태를 '예약마감'으로 변경
+    """
+    from doctor.models import Appointment
+
+    try:
+        appointment = Appointment.objects.select_related('patient', 'doctor').get(appointment_id=appointment_id)
+    except Appointment.DoesNotExist:
+        return Response({
+            'success': False,
+            'message': '존재하지 않는 예약입니다.'
+        }, status=status.HTTP_404_NOT_FOUND)
+
+    # 이미 처리된 예약인지 확인
+    if appointment.status != '대기':
+        return Response({
+            'success': False,
+            'message': f'이미 처리된 예약입니다. (현재 상태: {appointment.status})'
+        }, status=status.HTTP_400_BAD_REQUEST)
+
+    reason = request.data.get('reason', '')
+
+    # 거절 사유를 notes에 추가
+    if reason:
+        if appointment.notes:
+            appointment.notes += f"\n[거절 사유] {reason}"
+        else:
+            appointment.notes = f"[거절 사유] {reason}"
+
+    # 예약 상태를 '예약마감'으로 변경
+    appointment.status = '예약마감'
+    appointment.save()
+
+    return Response({
+        'success': True,
+        'message': '예약이 거절되었습니다.',
+        'appointment': {
+            'appointment_id': appointment.appointment_id,
+            'status': appointment.status,
+            'patient_name': appointment.patient.name,
+            'doctor_name': appointment.doctor.name if appointment.doctor else None,
+            'department': appointment.department,
+            'appointment_date': appointment.appointment_date.isoformat(),
+            'appointment_time': appointment.appointment_time.strftime('%H:%M'),
+            'notes': appointment.notes,
+        },
+    }, status=status.HTTP_200_OK)
