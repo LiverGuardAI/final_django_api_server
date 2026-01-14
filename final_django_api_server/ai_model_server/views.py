@@ -457,7 +457,7 @@ class PredictionTaskStatusView(APIView):
 # ============================================================
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([AllowAny])
 def search_drugs(request):
     """약물 마스터 CSV 기반 통합 검색 API"""
     query = request.query_params.get('q', '').strip()
@@ -486,7 +486,7 @@ def search_drugs(request):
 
 class DDIAnalysisView(APIView):
     """BentoML 엔진을 사용한 약물 상호작용 분석"""
-    permission_classes = [IsAuthenticated]
+    permission_classes = [AllowAny]
 
     def post(self, request):
         drugs = request.data.get('drugs', [])
