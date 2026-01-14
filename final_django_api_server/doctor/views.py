@@ -3,13 +3,13 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from accounts.permissions import IsDoctor
-from .models import Encounter, MedicalRecord, Patient, Doctor, LabResult, DoctorToRadiologyOrder, HCCDiagnosis, GenomicData, LabOrder, AnthropometricData
+from .models import Encounter, MedicalRecord, Patient, Doctor, LabResult, DoctorToRadiologyOrder, HCCDiagnosis, GenomicData, LabOrder, AnthropometricData, Announcement
 from radiology.models import DICOMStudy, DICOMSeries
 from .serializers import (
     EncounterSerializer, MedicalRecordSerializer, UpdateEncounterStatusSerializer, DoctorListSerializer,
     MedicalRecordDetailSerializer, LabResultSerializer, DoctorToRadiologyOrderSerializer,
     HCCDiagnosisSerializer, GenomicDataSerializer, CreateLabOrderSerializer,
-    CreateDoctorToRadiologyOrderSerializer, LabOrderSerializer
+    CreateDoctorToRadiologyOrderSerializer, LabOrderSerializer, AnnouncementSerializer
 )
 from administration.serializers import PatientSerializer
 from datetime import date, datetime
@@ -739,12 +739,12 @@ class PatientLabOrdersView(APIView):
         try:
             # 최근 오더 순으로 정렬
             orders = LabOrder.objects.filter(patient_id=patient_id).order_by('-created_at')
-            
+
             # 페이지네이션 등은 필요 시 추가 (지금은 전체 반환 or limit)
             limit = request.query_params.get('limit')
             if limit:
                 orders = orders[:int(limit)]
-                
+
             serializer = LabOrderSerializer(orders, many=True)
             return Response({
                 'count': len(serializer.data),
@@ -752,3 +752,71 @@ class PatientLabOrdersView(APIView):
             }, status=status.HTTP_200_OK)
         except Exception as e:
             return Response({'error': str(e)}, status=500)
+
+
+class AnnouncementListView(APIView):
+    """공지사항 목록 조회 API"""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        """
+        공지사항 목록 조회
+        - is_active=True인 공지사항만 조회
+        - 중요 공지사항이 먼저 나오도록 정렬 (ordering = ['-is_important', '-created_at'])
+
+        Query Parameters:
+        - limit: 조회할 개수 (기본값: 전체)
+        - type: 공지 유형 필터 (GENERAL, URGENT, EVENT, MAINTENANCE)
+        - important_only: true인 경우 중요 공지만 조회
+        """
+        try:
+            # 기본 쿼리: 활성 공지사항만
+            announcements = Announcement.objects.filter(is_active=True)
+
+            # 현재 시간 기준으로 유효한 공지사항만 (expires_at이 null이거나 미래인 것)
+            now = timezone.now()
+            announcements = announcements.filter(
+                Q(expires_at__isnull=True) | Q(expires_at__gt=now)
+            )
+
+            # 필터: 공지 유형
+            announcement_type = request.query_params.get('type')
+            if announcement_type:
+                announcements = announcements.filter(announcement_type=announcement_type)
+
+            # 필터: 중요 공지만
+            important_only = request.query_params.get('important_only')
+            if important_only and important_only.lower() == 'true':
+                announcements = announcements.filter(is_important=True)
+
+            # 정렬: 중요 공지가 먼저, 그 다음 최신순
+            announcements = announcements.order_by('-is_important', '-created_at')
+
+            # 개수 제한
+            limit = request.query_params.get('limit')
+            if limit:
+                announcements = announcements[:int(limit)]
+
+            serializer = AnnouncementSerializer(announcements, many=True)
+            return Response({
+                'count': len(serializer.data),
+                'results': serializer.data
+            }, status=status.HTTP_200_OK)
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class AnnouncementDetailView(APIView):
+    """공지사항 상세 조회 API"""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, announcement_id):
+        """공지사항 상세 조회"""
+        try:
+            announcement = Announcement.objects.get(announcement_id=announcement_id)
+            serializer = AnnouncementSerializer(announcement)
+            return Response(serializer.data, status=status.HTTP_200_OK)
+        except Announcement.DoesNotExist:
+            return Response({'error': '공지사항을 찾을 수 없습니다.'}, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

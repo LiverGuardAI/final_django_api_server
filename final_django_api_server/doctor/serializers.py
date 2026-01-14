@@ -2,7 +2,7 @@ from rest_framework import serializers
 from .models import (
     Patient, Encounter, MedicalRecord, Doctor, Appointment, ScheduleDoctor,
     LabResult, DoctorToRadiologyOrder, HCCDiagnosis, VitalData, AnthropometricData,
-    Questionnaire, LabOrder, GenomicData
+    Questionnaire, LabOrder, GenomicData, Announcement
 )
 from accounts.models import Department
 from datetime import datetime
@@ -185,3 +185,28 @@ class CreateDoctorToRadiologyOrderSerializer(serializers.ModelSerializer):
     class Meta:
         model = DoctorToRadiologyOrder
         fields = ['patient', 'encounter', 'doctor', 'modality', 'body_part', 'order_notes']
+
+
+class AnnouncementSerializer(serializers.ModelSerializer):
+    """공지사항 Serializer"""
+    announcement_type_display = serializers.CharField(source='get_announcement_type_display', read_only=True)
+    author_name = serializers.CharField(source='author.username', read_only=True, allow_null=True)
+
+    class Meta:
+        model = Announcement
+        fields = [
+            'announcement_id',
+            'title',
+            'content',
+            'announcement_type',
+            'announcement_type_display',
+            'is_important',
+            'is_active',
+            'published_at',
+            'expires_at',
+            'author',
+            'author_name',
+            'created_at',
+            'updated_at',
+        ]
+        read_only_fields = ['announcement_id', 'created_at', 'updated_at']
