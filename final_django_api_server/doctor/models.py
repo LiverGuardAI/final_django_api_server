@@ -357,8 +357,10 @@ class VitalData(models.Model):
 
     vital_id = models.AutoField(primary_key=True)
     measured_at = models.DateField()
-    sbp = models.IntegerField(blank=True, null=True)
-    dbp = models.IntegerField(blank=True, null=True)
+    sbp = models.IntegerField(blank=True, null=True)  # 수축기 혈압
+    dbp = models.IntegerField(blank=True, null=True)  # 이완기 혈압
+    heart_rate = models.IntegerField(blank=True, null=True)  # 심박수 (bpm)
+    temperature = models.DecimalField(max_digits=4, decimal_places=1, blank=True, null=True)  # 체온 (°C)
     patient = models.ForeignKey(Patient, on_delete=models.CASCADE, db_column='patient_id')
     medical_record = models.ForeignKey(
         MedicalRecord,
