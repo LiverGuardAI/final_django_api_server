@@ -4,7 +4,8 @@ from .views import (
     DoctorListView, EncounterDetailView, PatientEncounterHistoryView,
     PatientLabResultsView, PatientDoctorToRadiologyOrdersView, PatientHCCDiagnosisView,
     DoctorInfoView, DoctorMedicalRecordListView, CreateLabOrderView, CreateDoctorToRadiologyOrderView,
-    PatientCTSeriesView, PatientGenomicDataView, PatientLabOrdersView, PatientProfileView
+    PatientCTSeriesView, PatientGenomicDataView, PatientLabOrdersView, PatientProfileView,
+    AnnouncementListView, AnnouncementDetailView
 )
 
 urlpatterns = [
@@ -26,4 +27,8 @@ urlpatterns = [
     path('list/', DoctorListView.as_view(), name='doctor_list'),
     path('lab-orders/', CreateLabOrderView.as_view(), name='create_lab_order'),
     path('doctor-to-radiology-orders/', CreateDoctorToRadiologyOrderView.as_view(), name='create_imaging_order'),
+
+    # 공지사항
+    path('announcements/', AnnouncementListView.as_view(), name='announcement_list'),
+    path('announcements/<int:announcement_id>/', AnnouncementDetailView.as_view(), name='announcement_detail'),
 ]

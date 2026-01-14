@@ -215,7 +215,7 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 
 # BentoML Server URL
-BENTOML_SERVER_URL = "http://localhost:3001"
+BENTOML_SERVER_URL = "http://bentoml:3001"
 
 # Docker Compose 사용 시:
 # BENTOML_SERVER_URL = "http://bentoml_server:3000"

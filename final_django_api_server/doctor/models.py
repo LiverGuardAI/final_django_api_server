@@ -539,18 +539,18 @@ class LabOrder(models.Model):
 
 class Questionnaire(models.Model):
     """문진표"""
-    
+
     class QStatus(models.TextChoices):
         NOT_STARTED = 'NOT_STARTED', '미작성'
         IN_PROGRESS = 'IN_PROGRESS', '작성중'
         COMPLETED = 'COMPLETED', '완료'
 
     questionnaire_id = models.AutoField(primary_key=True)
-    
+
     # 상태 및 데이터
     status = models.CharField(max_length=20, choices=QStatus.choices, default=QStatus.NOT_STARTED)
     data = models.JSONField(default=dict, blank=True)  # 질문-답변 데이터
-    
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -560,3 +560,47 @@ class Questionnaire(models.Model):
 
     class Meta:
         db_table = 'hospital"."questionnaires'
+
+
+class Announcement(models.Model):
+    """병원 내 공지사항"""
+
+    class AnnouncementType(models.TextChoices):
+        GENERAL = 'GENERAL', '일반'
+        URGENT = 'URGENT', '긴급'
+        EVENT = 'EVENT', '행사'
+        MAINTENANCE = 'MAINTENANCE', '시스템점검'
+
+    announcement_id = models.AutoField(primary_key=True)
+    title = models.CharField(max_length=200)
+    content = models.TextField()
+    announcement_type = models.CharField(
+        max_length=20,
+        choices=AnnouncementType.choices,
+        default=AnnouncementType.GENERAL
+    )
+    is_important = models.BooleanField(default=False)
+    is_active = models.BooleanField(default=True)
+    published_at = models.DateTimeField(blank=True, null=True)
+    expires_at = models.DateTimeField(blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    # Foreign Keys
+    author = models.ForeignKey(
+        'accounts.CustomUser',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        db_column='author_id',
+        related_name='announcements'
+    )
+
+    class Meta:
+        db_table = 'hospital"."announcements'
+        verbose_name = '공지사항'
+        verbose_name_plural = '공지사항'
+        ordering = ['-is_important', '-created_at']
+
+    def __str__(self):
+        return f"{self.title} ({self.get_announcement_type_display()})"
