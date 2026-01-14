@@ -1,5 +1,5 @@
 from django.urls import path
-from .views import RadiologyDashboardView, DICOMStudyListView, WaitlistView, StartFilmingView, EndFilmingView
+from .views import RadiologyDashboardView, DICOMStudyListView, WaitlistView, StartFilmingView, EndFilmingView, ImagingStatsView
 
 urlpatterns = [
     path('dashboard/', RadiologyDashboardView.as_view(), name='radiology_dashboard'),
@@ -7,4 +7,5 @@ urlpatterns = [
     path('waitlist/', WaitlistView.as_view(), name='radiology_waitlist'),
     path('waitlist/start-filming/', StartFilmingView.as_view(), name='start_filming'),
     path('waitlist/end-filming/', EndFilmingView.as_view(), name='end_filming'),
+    path('stats/', ImagingStatsView.as_view(), name='imaging_stats'),
 ]

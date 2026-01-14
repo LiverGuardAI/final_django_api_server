@@ -20,7 +20,7 @@ import administration.routing  # 라우팅 파일 import
 @database_sync_to_async
 def get_user(user_id):
     try:
-        return get_user_model().objects.get(id=user_id)
+        return get_user_model().objects.get(pk=user_id)
     except:
         return AnonymousUser()
 

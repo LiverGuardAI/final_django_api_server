@@ -7,6 +7,7 @@ import re
 from django.contrib.auth import authenticate
 from datetime import datetime, timedelta
 from rest_framework.authentication import SessionAuthentication
+from rest_framework_simplejwt.authentication import JWTAuthentication
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
 
@@ -37,7 +38,7 @@ class LoginView(APIView):
             'access': str(refresh.access_token),
             'refresh': str(refresh),
             'user': {
-                'id': user.id,
+                'id': user.user_id,
                 'username': user.username,
                 'role': user_role,
                 'first_name': user.first_name,
@@ -102,7 +103,7 @@ class DoctorLoginView(APIView):
                 'access': str(refresh.access_token),
                 'refresh': str(refresh),
                 'user': {
-                    'id': user.id,
+                    'id': user.user_id,
                     'username': user.username,
                     'role': user.role,
                     'first_name': user.first_name,
@@ -179,7 +180,7 @@ class AdministrationLoginView(APIView):
                 'access': str(refresh.access_token),
                 'refresh': str(refresh),
                 'user': {
-                    'id': user.id,
+                    'id': user.user_id,
                     'username': user.username,
                     'role': user.role,
                     'first_name': user.first_name,
@@ -252,7 +253,7 @@ class RadiologyLoginView(APIView):
                 'access': str(refresh.access_token),
                 'refresh': str(refresh),
                 'user': {
-                    'id': user.id,
+                    'id': user.user_id,
                     'username': user.username,
                     'role': user.role,
                     'first_name': user.first_name,
@@ -293,8 +294,14 @@ class PublicDutyScheduleView(APIView):
         start_date = request.query_params.get('start_date')
         end_date = request.query_params.get('end_date')
         doctor_id = request.query_params.get('doctor_id')
+        schedule_status = request.query_params.get('status')
         
-        queryset = DutySchedule.objects.select_related('user').all()
+        queryset = DutySchedule.objects.select_related(
+            'user',
+            'user__doctor',
+            'user__radiology',
+            'user__administration'
+        ).all()
         
         if start_date:
             # 일정이 start_date 이후에 끝나야 함 (start_date와 겹치거나 그 이후)
@@ -304,6 +311,8 @@ class PublicDutyScheduleView(APIView):
             queryset = queryset.filter(start_time__date__lte=end_date)
         if doctor_id:
             queryset = queryset.filter(user_id=doctor_id)
+        if schedule_status:
+            queryset = queryset.filter(schedule_status=schedule_status)
             
         serializer = DutyScheduleSerializer(queryset, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
@@ -372,11 +381,16 @@ from rest_framework.authentication import SessionAuthentication
 class NotificationViewSet(viewsets.ModelViewSet):
     queryset = Notification.objects.all()
     serializer_class = NotificationSerializer
-    authentication_classes = [SessionAuthentication]
+    authentication_classes = [SessionAuthentication, JWTAuthentication]
 
     def get_queryset(self):
         # Filter by user if provides
-        queryset = super().get_queryset()
+        queryset = super().get_queryset().select_related(
+            'user',
+            'user__doctor',
+            'user__radiology',
+            'user__administration'
+        )
         user_id = self.request.query_params.get('user_id')
         if user_id:
             queryset = queryset.filter(user_id=user_id)
@@ -392,13 +406,19 @@ class NotificationViewSet(viewsets.ModelViewSet):
 class DutyScheduleViewSet(viewsets.ModelViewSet):
     queryset = DutySchedule.objects.all()
     serializer_class = DutyScheduleSerializer
-    authentication_classes = [SessionAuthentication] # Admin 페이지 전용
+    authentication_classes = [SessionAuthentication, JWTAuthentication] # Admin 페이지 전용
     
     def get_queryset(self):
-        queryset = super().get_queryset()
+        queryset = super().get_queryset().select_related(
+            'user',
+            'user__doctor',
+            'user__radiology',
+            'user__administration'
+        )
         user_id = self.request.query_params.get('user_id')
         start_date = self.request.query_params.get('start_date')
         end_date = self.request.query_params.get('end_date')
+        schedule_status = self.request.query_params.get('status')
         
         if user_id:
             queryset = queryset.filter(user_id=user_id)
@@ -406,6 +426,8 @@ class DutyScheduleViewSet(viewsets.ModelViewSet):
             queryset = queryset.filter(start_time__date__gte=start_date)
         if end_date:
             queryset = queryset.filter(end_time__date__lte=end_date)
+        if schedule_status:
+            queryset = queryset.filter(schedule_status=schedule_status)
             
         return queryset
 
@@ -482,7 +504,8 @@ class BulkScheduleView(APIView):
                 'RADIOLOGIST': 'RADIOLOGIST',
                 'CLERK': 'CLERK'
             }
-            work_role = role_map.get(user.role, 'DOCTOR')
+            user_role_upper = user.role.upper() if user.role else 'DOCTOR'
+            work_role = role_map.get(user_role_upper, 'DOCTOR')
 
             # 날짜 파싱
             start_date = datetime.strptime(start_date_str, '%Y-%m-%d').date()

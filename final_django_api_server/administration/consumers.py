@@ -1,21 +1,45 @@
 import json
 from channels.generic.websocket import AsyncWebsocketConsumer
+from urllib.parse import parse_qs
+from channels.db import database_sync_to_async
+from django.conf import settings
+import jwt
+from django.contrib.auth import get_user_model
 
 class ClinicConsumer(AsyncWebsocketConsumer):
     async def connect(self):
         import traceback
         try:
-            print(f"DEBUG: WebSocket Connect attempted. User: {self.scope.get('user')}")
-            # 1. 프론트엔드가 연결하면 'clinic_dashboard' 그룹에 초대
-            self.group_name = 'clinic_dashboard'
+            print(f"DEBUG: WebSocket Connect attempted. Init User: {self.scope.get('user')}")
 
+            user = self.scope.get('user')
+            
+            if not user or not user.is_authenticated:
+                print(f"DEBUG: Unknown user connecting: {user}")
+            else:
+                print(f"DEBUG: Authenticated user: {user}")
+
+            # 1. Join 'clinic_dashboard' group
+            self.group_name = 'clinic_dashboard'
             await self.channel_layer.group_add(
                 self.group_name,
                 self.channel_name
             )
+            
+            # 2. Join User-specific group for notifications
+            if user and user.is_authenticated:
+                self.user_group_name = f"user_{user.user_id}"
+                await self.channel_layer.group_add(
+                    self.user_group_name,
+                    self.channel_name
+                )
+                print(f"DEBUG: Added to user group {self.user_group_name}")
+            else:
+                print("DEBUG: User not authenticated, skipping personal group")
+
             print("DEBUG: Redis group_add successful")
             
-            await self.accept() # 연결 수락
+            await self.accept()
             print("DEBUG: WebSocket accepted")
         except Exception as e:
             print(f"ERROR in WebSocket connect: {e}")
@@ -23,22 +47,49 @@ class ClinicConsumer(AsyncWebsocketConsumer):
             await self.close()
 
     async def disconnect(self, close_code):
-        # 2. 연결 종료 시 그룹에서 제거
+        # Leave general group
         await self.channel_layer.group_discard(
             self.group_name,
             self.channel_name
         )
+        # Leave user group
+        user = self.scope.get('user')
+        if user and user.is_authenticated:
+            await self.channel_layer.group_discard(
+                f"user_{user.user_id}",
+                self.channel_name
+            )
 
-    # 3. views.py에서 보낸 알림을 받아서 프론트엔드한테 전달하는 함수
-    # 메서드명은 views.py의 "type": "update_queue"와 일치해야 함
     async def update_queue(self, event):
-        # event 딕셔너리에 views.py가 보낸 데이터가 들어있음
         message = event.get('message', '')
         data = event.get('data', {})
 
-        # 프론트엔드(React)에게 JSON으로 쏘기
         await self.send(text_data=json.dumps({
             'type': 'queue_update',
             'message': message,
             'data': data
         }))
+
+    async def schedule_update(self, event):
+        message_content = event.get('message', {})
+        
+        await self.send(text_data=json.dumps({
+            'type': 'schedule_update',
+            'data': message_content
+        }))
+
+    @database_sync_to_async
+    def get_user_from_token(self, token):
+        User = get_user_model()
+        try:
+            # Decode the token
+            # Note: simplejwt uses SECRET_KEY by default. 
+            # If your simplejwt setup uses a different signing key, adjust here.
+            payload = jwt.decode(token, settings.SECRET_KEY, algorithms=["HS256"])
+            user_id = payload.get('user_id')
+            if user_id:
+                return User.objects.get(id=user_id)
+        except Exception as e:
+            print(f"JWT Decode Error: {e}")
+            return None
+        return None

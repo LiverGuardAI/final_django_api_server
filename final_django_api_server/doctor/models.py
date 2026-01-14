@@ -225,6 +225,7 @@ class Encounter(models.Model):
 
         # 4. Redis Cache 업데이트 (상태 변화에 따른 카운트 조정)
         try:
+            # === 진료 대기열 (Clinic) ===
             # 진료 대기 -> 진료 중
             if old_state == self.WorkflowState.WAITING_CLINIC and new_state == self.WorkflowState.IN_CLINIC:
                 cache_manager.decrement_waiting_count('clinic')
@@ -232,10 +233,22 @@ class Encounter(models.Model):
             # 진료 중 -> 완료 (또는 수납대기/결과대기 등으로 나감)
             elif old_state == self.WorkflowState.IN_CLINIC and new_state != self.WorkflowState.IN_CLINIC:
                 cache_manager.decrement_in_progress_count('clinic')
-                # 주의: 수납대기 등은 별도 카운트가 없다면 in_progress만 감소시킴
-            
-            # 기타 필요한 Redis 로직 추가 가능
-            
+
+            # === 영상의학과 대기열 (Imaging) ===
+            # 이전 상태가 촬영 대기였다면 카운트 감소
+            if old_state == self.WorkflowState.WAITING_IMAGING:
+                cache_manager.decrement_waiting_count('imaging')
+            # 이전 상태가 촬영 중이었다면 카운트 감소
+            elif old_state == self.WorkflowState.IN_IMAGING:
+                cache_manager.decrement_in_progress_count('imaging')
+
+            # 새로운 상태가 촬영 대기라면 카운트 증가
+            if new_state == self.WorkflowState.WAITING_IMAGING:
+                cache_manager.increment_waiting_count('imaging')
+            # 새로운 상태가 촬영 중이라면 카운트 증가
+            elif new_state == self.WorkflowState.IN_IMAGING:
+                cache_manager.increment_in_progress_count('imaging')
+
         except Exception as e:
             print(f"Redis cache update failed: {e}")
             # 캐시 업데이트 실패가 트랜잭션을 롤백시키면 안 됨 (로그만 남김)

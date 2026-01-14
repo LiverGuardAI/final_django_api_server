@@ -52,7 +52,7 @@ class DoctorDashboardView(APIView):
         return Response({
             'message': f'안녕하세요, {user.first_name} 의사님',
             'user': {
-                'id': user.id,
+                'id': user.user_id,
                 'username': user.username,
                 'role': user.role,
                 'first_name': user.first_name,

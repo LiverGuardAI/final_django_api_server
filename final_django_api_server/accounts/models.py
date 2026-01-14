@@ -89,12 +89,24 @@ class DutySchedule(models.Model):
         PENDING = 'PENDING', '대기'
         CANCELLED = 'CANCELLED', '취소'
 
+    class ShiftType(models.TextChoices):
+        DAY = 'DAY', '주간'
+        EVENING = 'EVENING', '저녁'
+        NIGHT = 'NIGHT', '심야'
+        OFF = 'OFF', '휴무'
+
     schedule_id = models.AutoField(primary_key=True)
     user = models.ForeignKey(CustomUser, on_delete=models.CASCADE)
     work_role = WorkRoleField(choices=OnlineStatus.WorkRole.choices)
     start_time = models.DateTimeField()
     end_time = models.DateTimeField()
-    shift_type = models.CharField(max_length=10, blank=True, null=True)
+    shift_type = models.CharField(
+        max_length=10, 
+        choices=ShiftType.choices,
+        blank=True, 
+        null=True,
+        verbose_name='근무 유형'
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     schedule_status = DutyStatusField(choices=DutyStatus.choices, default='PENDING')

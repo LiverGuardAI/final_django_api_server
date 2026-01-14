@@ -76,7 +76,7 @@ class AdministrationDashboardView(APIView):
         return Response({
             'message': f'안녕하세요, {user.first_name} 원무과',
             'user': {
-                'id': user.id,
+                'id': user.user_id,
                 'username': user.username,
                 'role': user.role,
                 'first_name': user.first_name,
@@ -247,6 +247,14 @@ class AppointmentListView(APIView):
 
         if patient_id:
             appointments = appointments.filter(patient_id=patient_id)
+
+        doctor_id = request.query_params.get('doctor_id', None)
+        if doctor_id:
+            if str(doctor_id).lower() not in ['null', 'undefined', 'none']:
+                try:
+                    appointments = appointments.filter(doctor_id=int(doctor_id))
+                except (TypeError, ValueError):
+                    pass
 
         appointments = appointments.order_by('-appointment_date', '-appointment_time')
         serializer = AppointmentSerializer(appointments, many=True)
@@ -631,12 +639,22 @@ class AdministrationWaitingQueueView(APIView):
 
     def get(self, request):
         view_type = request.query_params.get('type', 'clinic') # clinic | imaging
-        
+
         from django.db.models import Q
         from django.utils import timezone
-        
+        import json
+
         today = timezone.localdate()
-        
+
+        # Redis 캐시 키
+        cache_key = f'waiting_queue_list:{view_type}'
+
+        # 1. 캐시 확인 (5초 TTL)
+        cached_data = cache_manager.redis_client.get(cache_key)
+        if cached_data:
+            return Response(json.loads(cached_data), status=status.HTTP_200_OK)
+
+        # 2. 캐시 미스: DB 조회
         if view_type == 'clinic':
              # 진료 대기 현황: 진료대기, 진료중, 진료완료(오늘)
             filter_condition = Q(workflow_state__in=[
@@ -653,8 +671,6 @@ class AdministrationWaitingQueueView(APIView):
                 Encounter.WorkflowState.WAITING_IMAGING,
                 Encounter.WorkflowState.IN_IMAGING,
             ])
-            # 영상은 Encounter 상태만으로는 '완료'를 구분하기 어려울 수 있으나(검사완료 후 다시 진료대기로 가므로),
-            # 일단 대기/진행만 보여줌
         else:
             return Response({'error': 'Invalid view type'}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -667,19 +683,34 @@ class AdministrationWaitingQueueView(APIView):
                 'questionnaire'
             )\
             .order_by('state_entered_at')
-        
+
         serializer = EncounterSerializer(queryset, many=True)
 
-        # 통계 정보 (원무과용이라도 전체 대기 수는 보여주는 게 좋음)
-        from .cache_manager import cache_manager
-        
-        return Response({
-            'success': True,
-            'stats': {
+        # 통계 정보
+        if view_type == 'clinic':
+            stats = {
                 'waiting': cache_manager.get_waiting_count('clinic'),
-            },
+                'in_progress': cache_manager.get_in_progress_count('clinic'),
+            }
+        else:  # imaging
+            stats = {
+                'waiting': cache_manager.get_waiting_count('imaging'),
+                'in_progress': cache_manager.get_in_progress_count('imaging'),
+            }
+
+        response_data = {
+            'success': True,
+            'stats': stats,
             'queue': serializer.data
-        }, status=status.HTTP_200_OK)
+        }
+
+        # 3. Redis 캐싱 (5초)
+        try:
+            cache_manager.redis_client.setex(cache_key, 5, json.dumps(response_data))
+        except Exception as e:
+            print(f"Cache write failed: {e}")
+
+        return Response(response_data, status=status.HTTP_200_OK)
 
 
 class CallNextPatientView(APIView):
@@ -969,12 +1000,31 @@ class ConfirmOrderView(APIView):
                 order.status = 'WAITING' # 접수 완료 -> 촬영 대기
                 order.save()
                 encounter_to_close = order.encounter
-            
+
+                # 영상의학과 오더 접수 시 환자를 촬영 대기 상태로 전환
+                if encounter_to_close and encounter_to_close.workflow_state != Encounter.WorkflowState.COMPLETED:
+                    # transition_to() 사용하면 자동으로 Redis 카운터 업데이트됨
+                    encounter_to_close.transition_to(Encounter.WorkflowState.WAITING_IMAGING)
+
+                    # WebSocket 알림 전송 (영상의학과 대기열 추가)
+                    send_queue_update_websocket(
+                        message=f"촬영 대기 환자 추가: {encounter_to_close.patient.name}",
+                        extra_data={
+                            "queue_type": "imaging",
+                            "imaging_waiting": cache_manager.get_waiting_count('imaging'),
+                            "imaging_in_progress": cache_manager.get_in_progress_count('imaging'),
+                        }
+                    )
+
+                    # 캐시 무효화
+                    cache_manager.redis_client.delete('waiting_queue_list:imaging')
+
             else:
                 return Response({'error': 'Invalid order type'}, status=status.HTTP_400_BAD_REQUEST)
 
-            # 단순 접수 (CONFIRM) 인 경우 -> 결과 대기 상태로 변경 (그래야 원무과 '추가진료' 탭에 뜸)
-            if action == 'CONFIRM' and encounter_to_close:
+            # 단순 접수 (CONFIRM) 인 경우 -> 결과 대기 상태로 변경 (LAB 오더만)
+            # 주의: IMAGING의 경우 이미 위에서 WAITING_IMAGING으로 전환했으므로 제외
+            if action == 'CONFIRM' and encounter_to_close and order_type == 'LAB':
                 # 이미 완료된 상태가 아니라면 결과대기로 변경
                 if encounter_to_close.workflow_state != Encounter.WorkflowState.COMPLETED:
                     encounter_to_close.workflow_state = Encounter.WorkflowState.WAITING_RESULTS
