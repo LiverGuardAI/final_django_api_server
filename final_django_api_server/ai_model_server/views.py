@@ -1,7 +1,13 @@
+import requests
+import pandas as pd
+from django.conf import settings
+from rest_framework.decorators import api_view, permission_classes
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
-from rest_framework.permissions import AllowAny
+from rest_framework.permissions import AllowAny, IsAuthenticated
+
+# 기존 팀원분이 만든 Celery Task 임포트
 from .tasks import (
     process_segmentation,
     process_feature_extraction,
@@ -11,9 +17,25 @@ from .tasks import (
     process_all_predictions
 )
 
-import requests
-from django.conf import settings
+# ============================================================
+# [추가] 약물 검색 엔진 데이터 로드 (서버 시작 시 1회 실행)
+# ============================================================
+try:
+    try:
+        drug_db = pd.read_csv(settings.MEDICINE_MASTER_PATH, encoding='cp949')
+    except:
+        drug_db = pd.read_csv(settings.MEDICINE_MASTER_PATH, encoding='utf-8')
+        
+    drug_db = drug_db[['item_name', 'ingr_name_ko', 'ingr_name_en']].fillna('').drop_duplicates()
+    print(f"✅ [AI Model Server] 약물 검색 엔진 로드 완료: {len(drug_db)}개 항목")
+except Exception as e:
+    print(f"❌ [AI Model Server] 약물 데이터 로드 실패: {e}")
+    drug_db = pd.DataFrame(columns=['item_name', 'ingr_name_ko', 'ingr_name_en'])
 
+
+# ============================================================
+# AI Segmentation & Feature Extraction (Mosec)
+# ============================================================
 
 class CreateSegmentationMaskView(APIView):
     """
@@ -428,3 +450,74 @@ class PredictionTaskStatusView(APIView):
                 'error': 'Failed to fetch task status',
                 'details': str(e)
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+# ============================================================
+# [추가] 약물 검색 및 DDI 분석 API (doctor/views.py에서 이동)
+# ============================================================
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def search_drugs(request):
+    """약물 마스터 CSV 기반 통합 검색 API"""
+    query = request.query_params.get('q', '').strip()
+    if not query:
+        return Response([])
+
+    # 제품명(item_name) 또는 성분명(ko/en)에서 검색어 포함 여부 확인
+    mask = (
+        drug_db['item_name'].str.contains(query, case=False, na=False) |
+        drug_db['ingr_name_ko'].str.contains(query, case=False, na=False) |
+        drug_db['ingr_name_en'].str.contains(query, case=False, na=False)
+    )
+    
+    # 상위 15개 결과 추출 및 전송
+    results = drug_db[mask].head(15)
+    data = [
+        {
+            "item_name": row['item_name'],
+            "name_kr": row['ingr_name_ko'],
+            "name_en": row['ingr_name_en']
+        }
+        for _, row in results.iterrows()
+    ]
+    return Response(data)
+
+
+class DDIAnalysisView(APIView):
+    """BentoML 엔진을 사용한 약물 상호작용 분석"""
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        drugs = request.data.get('drugs', [])
+        if len(drugs) < 2:
+            return Response({"error": "최소 2개의 약물이 필요합니다."}, status=400)
+
+        try:
+            # 💡 [방어 코드] 리액트에서 객체가 오든 글자가 오든 안전하게 추출
+            d1 = drugs[0]
+            d2 = drugs[1]
+
+            payload = {
+                "drug_a": { 
+                    "name_kr": d1.get('name_kr', d1) if isinstance(d1, dict) else d1, 
+                    "name_en": d1.get('name_en', d1) if isinstance(d1, dict) else d1 
+                },
+                "drug_b": { 
+                    "name_kr": d2.get('name_kr', d2) if isinstance(d2, dict) else d2, 
+                    "name_en": d2.get('name_en', d2) if isinstance(d2, dict) else d2 
+                }
+            }
+
+            # AI 서버 호출 (settings.BENTOML_SERVER_URL 사용 권장)
+            # 여기서는 명확성을 위해 직접 주소를 쓰거나 settings를 활용
+            target_url = f"{settings.BENTOML_SERVER_URL}/check_ddi"
+            response = requests.post(target_url, json=payload, timeout=15)
+            response.raise_for_status()
+            
+            return Response(response.json(), status=200)
+
+        except requests.exceptions.RequestException as e:
+            return Response({"error": "AI 분석 엔진이 응답하지 않습니다."}, status=503)
+        except Exception as e:
+            return Response({"error": f"서버 내부 오류: {str(e)}"}, status=500)

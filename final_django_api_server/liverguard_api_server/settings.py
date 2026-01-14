@@ -219,3 +219,6 @@ BENTOML_SERVER_URL = "http://localhost:3001"
 
 # Docker Compose 사용 시:
 # BENTOML_SERVER_URL = "http://bentoml_server:3000"
+
+DATA_DIR = os.path.join(BASE_DIR, 'data')
+MEDICINE_MASTER_PATH = os.path.join(DATA_DIR, 'medicine_master_v3.csv')
