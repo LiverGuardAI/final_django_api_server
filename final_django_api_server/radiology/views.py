@@ -248,26 +248,66 @@ class EndFilmingView(APIView):
                     'error': f'Encounter for patient {patient_id} not found'
                 }, status=status.HTTP_404_NOT_FOUND)
 
-            # 촬영 완료 후 의사 판독 대기 상태로 전환
-            encounter.transition_to(Encounter.WorkflowState.WAITING_RESULTS)
-
             # 오더 완료 처리
-            from doctor.models import DoctorToRadiologyOrder
+            from doctor.models import DoctorToRadiologyOrder, LabOrder
             imaging_orders = DoctorToRadiologyOrder.objects.filter(
                 encounter=encounter,
                 status='IN_PROGRESS'
             )
             imaging_orders.update(status='COMPLETED')
 
-            # 캐시 무효화
+            # **FIX**: 촬영 완료 후 다음 단계 결정
+            # 1. 다른 IMAGING 오더(WAITING 상태)가 남아있는지 확인
+            has_waiting_imaging = DoctorToRadiologyOrder.objects.filter(
+                encounter=encounter,
+                status='WAITING'
+            ).exists()
+
+            # 2. REQUESTED 상태 오더가 있는지 확인 (아직 접수 안 된 오더)
+            has_requested_orders = (
+                LabOrder.objects.filter(encounter=encounter, status='REQUESTED').exists() or
+                DoctorToRadiologyOrder.objects.filter(encounter=encounter, status='REQUESTED').exists()
+            )
+
+            if has_waiting_imaging:
+                # 다른 촬영 오더(접수 완료)가 남아있으면 촬영 대기로 유지
+                encounter.transition_to(Encounter.WorkflowState.WAITING_IMAGING)
+                print(f"INFO: 촬영 완료했지만 다른 IMAGING 오더 대기 중: {encounter.encounter_id}")
+            elif has_requested_orders:
+                # 아직 접수 안 된 오더가 있으면 원무과로 복귀
+                encounter.transition_to(Encounter.WorkflowState.REGISTERED)
+                print(f"INFO: 촬영 완료 후 미접수 오더 있음 → 원무과 복귀: {encounter.encounter_id}")
+            else:
+                # 모든 오더 완료 → 결과 대기 (환자 귀가)
+                encounter.transition_to(Encounter.WorkflowState.WAITING_RESULTS)
+                print(f"INFO: 모든 촬영 완료 → 결과 대기: {encounter.encounter_id}")
+
+            # 캐시 무효화 (상태에 따라 적절한 캐시 삭제)
             from administration.cache_manager import cache_manager
             cache_manager.redis_client.delete('waiting_queue_list:imaging')
-            cache_manager.redis_client.delete('waiting_queue_list:clinic')  # 결과대기는 clinic에도 포함
 
-            # WebSocket 알림
+            if encounter.workflow_state == Encounter.WorkflowState.WAITING_RESULTS:
+                # 결과대기는 clinic queue에도 포함
+                cache_manager.redis_client.delete('waiting_queue_list:clinic')
+            elif encounter.workflow_state == Encounter.WorkflowState.REGISTERED:
+                # 원무과로 복귀한 경우 admin queue 무효화
+                cache_manager.redis_client.delete('waiting_queue_list:admin')
+
+            # WebSocket 알림 (상태에 맞는 메시지 전송)
             from administration.views import send_queue_update_websocket
+
+            if encounter.workflow_state == Encounter.WorkflowState.WAITING_IMAGING:
+                ws_message = f"촬영 완료: {encounter.patient.name} (다른 촬영 대기)"
+                response_message = '촬영이 종료되었습니다. 다른 촬영 오더가 대기 중입니다.'
+            elif encounter.workflow_state == Encounter.WorkflowState.REGISTERED:
+                ws_message = f"촬영 완료: {encounter.patient.name} (원무과 복귀 - 미접수 오더 있음)"
+                response_message = '촬영이 종료되었습니다. 접수되지 않은 오더가 있어 원무과로 복귀합니다.'
+            else:  # WAITING_RESULTS
+                ws_message = f"촬영 완료: {encounter.patient.name} (결과 대기 - 귀가 가능)"
+                response_message = '촬영이 종료되었습니다. 모든 검사가 완료되어 결과 대기 중입니다. 환자 귀가 가능합니다.'
+
             send_queue_update_websocket(
-                message=f"촬영 완료: {encounter.patient.name} (의사 판독 대기)",
+                message=ws_message,
                 extra_data={
                     "queue_type": "imaging",
                     "imaging_waiting": cache_manager.get_waiting_count('imaging'),
@@ -280,7 +320,7 @@ class EndFilmingView(APIView):
 
             return Response({
                 'success': True,
-                'message': '촬영이 종료되었습니다. 환자가 의사 판독 대기 상태로 전환되었습니다.',
+                'message': response_message,
                 'patient': serializer.data
             }, status=status.HTTP_200_OK)
 

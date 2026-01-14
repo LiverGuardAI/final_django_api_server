@@ -3,13 +3,13 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from accounts.permissions import IsDoctor
-from .models import Encounter, MedicalRecord, Patient, Doctor, LabResult, DoctorToRadiologyOrder, HCCDiagnosis, GenomicData, LabOrder, AnthropometricData, Announcement
+from .models import Encounter, MedicalRecord, Patient, Doctor, LabResult, DoctorToRadiologyOrder, HCCDiagnosis, GenomicData, LabOrder, AnthropometricData, Announcement, ScheduleDoctor
 from radiology.models import DICOMStudy, DICOMSeries
 from .serializers import (
     EncounterSerializer, MedicalRecordSerializer, UpdateEncounterStatusSerializer, DoctorListSerializer,
     MedicalRecordDetailSerializer, LabResultSerializer, DoctorToRadiologyOrderSerializer,
     HCCDiagnosisSerializer, GenomicDataSerializer, CreateLabOrderSerializer,
-    CreateDoctorToRadiologyOrderSerializer, LabOrderSerializer, AnnouncementSerializer
+    CreateDoctorToRadiologyOrderSerializer, LabOrderSerializer, AnnouncementSerializer, ScheduleDoctorSerializer
 )
 from administration.serializers import PatientSerializer
 from datetime import date, datetime
@@ -96,6 +96,68 @@ class PatientListView(APIView):
             'count': patients.count() if not limit else len(patients), # 슬라이싱 후에는 count() 호출 불가할 수 있음
             'patients': serializer.data
         }, status=status.HTTP_200_OK)
+
+
+
+class ScheduleDoctorListView(APIView):
+    permission_classes = [IsDoctor]
+
+    def get(self, request):
+        doctor = getattr(request.user, 'doctor', None)
+        if not doctor:
+            return Response({'error': 'Doctor profile not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        start_date = request.query_params.get('start_date')
+        end_date = request.query_params.get('end_date')
+        queryset = ScheduleDoctor.objects.filter(doctor=doctor)
+        if start_date:
+            queryset = queryset.filter(schedule_date__gte=start_date)
+        if end_date:
+            queryset = queryset.filter(schedule_date__lte=end_date)
+
+        serializer = ScheduleDoctorSerializer(queryset.order_by('schedule_date', 'start_time'), many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    def post(self, request):
+        doctor = getattr(request.user, 'doctor', None)
+        if not doctor:
+            return Response({'error': 'Doctor profile not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        serializer = ScheduleDoctorSerializer(data=request.data)
+        if serializer.is_valid():
+            schedule = serializer.save(doctor=doctor)
+            return Response(ScheduleDoctorSerializer(schedule).data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class ScheduleDoctorDetailView(APIView):
+    permission_classes = [IsDoctor]
+
+    def patch(self, request, schedule_id):
+        doctor = getattr(request.user, 'doctor', None)
+        if not doctor:
+            return Response({'error': 'Doctor profile not found.'}, status=status.HTTP_404_NOT_FOUND)
+        try:
+            schedule = ScheduleDoctor.objects.get(schedule_id=schedule_id, doctor=doctor)
+        except ScheduleDoctor.DoesNotExist:
+            return Response({'error': 'Schedule not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        serializer = ScheduleDoctorSerializer(schedule, data=request.data, partial=True)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_200_OK)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    def delete(self, request, schedule_id):
+        doctor = getattr(request.user, 'doctor', None)
+        if not doctor:
+            return Response({'error': 'Doctor profile not found.'}, status=status.HTTP_404_NOT_FOUND)
+        try:
+            schedule = ScheduleDoctor.objects.get(schedule_id=schedule_id, doctor=doctor)
+        except ScheduleDoctor.DoesNotExist:
+            return Response({'error': 'Schedule not found.'}, status=status.HTTP_404_NOT_FOUND)
+        schedule.delete()
+        return Response({'message': 'Schedule deleted.'}, status=status.HTTP_200_OK)
 
 
 class QueueListView(APIView):

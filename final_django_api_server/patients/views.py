@@ -6,6 +6,7 @@ from rest_framework.response import Response
 from rest_framework.authtoken.models import Token
 from django.contrib.auth.hashers import check_password
 from django.utils import timezone
+from accounts.models import DutySchedule
 from django.db import IntegrityError
 from datetime import date
 
@@ -673,6 +674,23 @@ def create_appointment(request):
     from datetime import datetime, timedelta
     now = datetime.now()
     appointment_time = (now + timedelta(minutes=10)).time()
+
+    # 5. duty schedule check
+    dt = datetime.combine(today, appointment_time)
+    if timezone.is_naive(dt):
+        dt = timezone.make_aware(dt, timezone.get_current_timezone())
+    if not DutySchedule.objects.filter(
+        user_id=doctor.user_id,
+        schedule_status='CONFIRMED',
+        start_time__lt=dt,
+        end_time__gt=dt
+    ).exists():
+        return Response({
+            'success': False,
+            'message': '해당 시간은 근무 일정이 아닙니다.'
+        }, status=status.HTTP_400_BAD_REQUEST)
+
+
     
     try:
         appointment = Appointment.objects.create(
@@ -782,6 +800,22 @@ def approve_appointment(request, appointment_id):
         return Response({
             'success': False,
             'message': f'이미 처리된 예약입니다. (현재 상태: {appointment.status})'
+        }, status=status.HTTP_400_BAD_REQUEST)
+
+
+    # duty schedule check
+    dt = datetime.combine(appointment.appointment_date, appointment.appointment_time)
+    if timezone.is_naive(dt):
+        dt = timezone.make_aware(dt, timezone.get_current_timezone())
+    if not DutySchedule.objects.filter(
+        user_id=appointment.doctor.user_id,
+        schedule_status='CONFIRMED',
+        start_time__lt=dt,
+        end_time__gt=dt
+    ).exists():
+        return Response({
+            'success': False,
+            'message': '해당 시간은 근무 일정이 아닙니다.'
         }, status=status.HTTP_400_BAD_REQUEST)
 
     # Encounter 생성 (진료 대기열에 추가)

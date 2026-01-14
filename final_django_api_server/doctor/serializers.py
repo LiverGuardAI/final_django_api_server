@@ -75,17 +75,38 @@ class DepartmentSerializer(serializers.ModelSerializer):
 class DoctorListSerializer(serializers.ModelSerializer):
     """의사 목록 Serializer (원무과 접수용)"""
     department = DepartmentSerializer(read_only=True)
+    user_id = serializers.IntegerField(source='user.user_id', read_only=True)
 
     class Meta:
         model = Doctor
         fields = [
             'doctor_id',
+            'user_id',
             'name',
             'employee_no',
             'department',
             'room_number',
             'phone',
         ]
+
+
+class ScheduleDoctorSerializer(serializers.ModelSerializer):
+    """Doctor personal schedule serializer"""
+    class Meta:
+        model = ScheduleDoctor
+        fields = [
+            'schedule_id',
+            'schedule_date',
+            'schedule_type',
+            'start_time',
+            'end_time',
+            'notes',
+            'is_available',
+            'doctor',
+            'created_at',
+            'updated_at',
+        ]
+        read_only_fields = ['schedule_id', 'doctor', 'created_at', 'updated_at']
 
 
 class LabResultSerializer(serializers.ModelSerializer):

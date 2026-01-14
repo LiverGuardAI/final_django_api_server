@@ -3,7 +3,7 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from accounts.permissions import IsClerk
-from doctor.models import Patient, Appointment, Encounter, LabOrder, VitalData, AnthropometricData, MedicalRecord
+from doctor.models import Patient, Appointment, Encounter, LabOrder, VitalData, AnthropometricData, MedicalRecord, Doctor
 from .serializers import (
     PatientSerializer,
     AppointmentSerializer,
@@ -18,7 +18,26 @@ from django.db import transaction
 from channels.layers import get_channel_layer
 from asgiref.sync import async_to_sync
 from django.utils import timezone
+from accounts.models import DutySchedule
 
+
+
+
+def is_within_duty_schedule(doctor_id, appointment_date, appointment_time):
+    if not doctor_id:
+        return False
+    doctor = Doctor.objects.filter(doctor_id=doctor_id).select_related('user').first()
+    if not doctor:
+        return False
+    dt = datetime.combine(appointment_date, appointment_time)
+    if timezone.is_naive(dt):
+        dt = timezone.make_aware(dt, timezone.get_current_timezone())
+    return DutySchedule.objects.filter(
+        user_id=doctor.user_id,
+        schedule_status='CONFIRMED',
+        start_time__lt=dt,
+        end_time__gt=dt
+    ).exists()
 
 def send_queue_update_websocket(message="대기열이 업데이트되었습니다.", extra_data=None):
     """
@@ -163,6 +182,13 @@ class PatientDetailView(APIView):
             serializer = PatientSerializer(patient, data=request.data, partial=True)
 
             if serializer.is_valid():
+                doctor = serializer.validated_data.get('doctor', appointment.doctor)
+                appointment_date = serializer.validated_data.get('appointment_date', appointment.appointment_date)
+                appointment_time = serializer.validated_data.get('appointment_time', appointment.appointment_time)
+                if not doctor or not is_within_duty_schedule(doctor.doctor_id, appointment_date, appointment_time):
+                    return Response({
+                        'error': '\uD574\uB2F9 \uC2DC\uAC04\uC740 \uADFC\uBB34 \uC77C\uC815\uC774 \uC544\uB2D9\uB2C8\uB2E4.'
+                    }, status=status.HTTP_400_BAD_REQUEST)
                 serializer.save()
                 return Response({
                     'message': '환자 정보가 수정되었습니다.',
@@ -269,6 +295,13 @@ class AppointmentListView(APIView):
         serializer = AppointmentCreateSerializer(data=request.data)
 
         if serializer.is_valid():
+            doctor = serializer.validated_data.get('doctor')
+            appointment_date = serializer.validated_data.get('appointment_date')
+            appointment_time = serializer.validated_data.get('appointment_time')
+            if not doctor or not is_within_duty_schedule(doctor.doctor_id, appointment_date, appointment_time):
+                return Response({
+                    'error': '\uD574\uB2F9 \uC2DC\uAC04\uC740 \uADFC\uBB34 \uC77C\uC815\uC774 \uC544\uB2D9\uB2C8\uB2E4.'
+                }, status=status.HTTP_400_BAD_REQUEST)
             appointment = serializer.save()
             return Response({
                 'message': '예약이 등록되었습니다.',
@@ -980,62 +1013,85 @@ class ConfirmOrderView(APIView):
     permission_classes = [IsAuthenticated]
 
     def patch(self, request, order_id):
+        """
+        오더 접수 처리 - 새로운 로직:
+        1. 오더 상태만 변경 (LAB: IN_PROGRESS, IMAGING: WAITING)
+        2. 모든 오더가 접수 완료되었는지 확인
+        3. 모든 오더 접수 완료 시:
+           - CT 오더 있음 → WAITING_IMAGING (촬영 대기)
+           - CT 오더 없음 → WAITING_RESULTS (결과 대기, 환자 귀가)
+        """
         try:
-            order_type = request.data.get('order_type') # 'LAB' or 'IMAGING'
-            action = request.data.get('action') # 'CONFIRM' or 'CONFIRM_AND_DISCHARGE'
-            
+            order_type = request.data.get('order_type')  # 'LAB' or 'IMAGING'
+
             from doctor.models import LabOrder, DoctorToRadiologyOrder, Encounter
             from django.utils import timezone
 
-            encounter_to_close = None
+            encounter = None
 
+            # 1. 오더 상태 변경
             if order_type == 'LAB':
                 order = LabOrder.objects.get(order_id=order_id)
-                order.status = 'IN_PROGRESS' # 접수 완료 -> 검사 중
+                order.status = 'IN_PROGRESS'  # 접수 완료 -> 검사 중 (외부검사는 며칠 소요)
                 order.save()
-                encounter_to_close = order.encounter
-            
+                encounter = order.encounter
+
             elif order_type == 'IMAGING':
                 order = DoctorToRadiologyOrder.objects.get(order_id=order_id)
-                order.status = 'WAITING' # 접수 완료 -> 촬영 대기
+                order.status = 'WAITING'  # 접수 완료 -> 촬영 대기
                 order.save()
-                encounter_to_close = order.encounter
-
-                # 영상의학과 오더 접수 시 환자를 촬영 대기 상태로 전환
-                if encounter_to_close and encounter_to_close.workflow_state != Encounter.WorkflowState.COMPLETED:
-                    # transition_to() 사용하면 자동으로 Redis 카운터 업데이트됨
-                    encounter_to_close.transition_to(Encounter.WorkflowState.WAITING_IMAGING)
-
-                    # WebSocket 알림 전송 (영상의학과 대기열 추가)
-                    send_queue_update_websocket(
-                        message=f"촬영 대기 환자 추가: {encounter_to_close.patient.name}",
-                        extra_data={
-                            "queue_type": "imaging",
-                            "imaging_waiting": cache_manager.get_waiting_count('imaging'),
-                            "imaging_in_progress": cache_manager.get_in_progress_count('imaging'),
-                        }
-                    )
-
-                    # 캐시 무효화
-                    cache_manager.redis_client.delete('waiting_queue_list:imaging')
+                encounter = order.encounter
 
             else:
                 return Response({'error': 'Invalid order type'}, status=status.HTTP_400_BAD_REQUEST)
 
-            # 단순 접수 (CONFIRM) 인 경우 -> 결과 대기 상태로 변경 (LAB 오더만)
-            # 주의: IMAGING의 경우 이미 위에서 WAITING_IMAGING으로 전환했으므로 제외
-            if action == 'CONFIRM' and encounter_to_close and order_type == 'LAB':
-                # 이미 완료된 상태가 아니라면 결과대기로 변경
-                if encounter_to_close.workflow_state != Encounter.WorkflowState.COMPLETED:
-                    encounter_to_close.workflow_state = Encounter.WorkflowState.WAITING_RESULTS
-                    encounter_to_close.save()
+            if not encounter or encounter.workflow_state == Encounter.WorkflowState.COMPLETED:
+                return Response({'message': '오더가 처리되었습니다.'}, status=status.HTTP_200_OK)
 
-            # 귀가 조치 로직 (CONFIRM_AND_DISCHARGE)
-            if action == 'CONFIRM_AND_DISCHARGE' and encounter_to_close:
-                encounter_to_close.workflow_state = Encounter.WorkflowState.COMPLETED
-                encounter_to_close.status = Encounter.Status.COMPLETED
-                encounter_to_close.end_time = timezone.now()
-                encounter_to_close.save()
+            # 2. 모든 오더 접수 완료 여부 확인
+            has_pending_lab = LabOrder.objects.filter(
+                encounter=encounter,
+                status='REQUESTED'
+            ).exists()
+
+            has_pending_imaging = DoctorToRadiologyOrder.objects.filter(
+                encounter=encounter,
+                status='REQUESTED'
+            ).exists()
+
+            # 아직 접수 안 된 오더가 있으면 REGISTERED 상태 유지
+            if has_pending_lab or has_pending_imaging:
+                print(f"INFO: 오더 접수했지만 다른 오더 대기 중: {encounter.encounter_id}")
+                return Response({'message': '오더가 처리되었습니다.'}, status=status.HTTP_200_OK)
+
+            # 3. 모든 오더 접수 완료 → 다음 단계로 전환
+            # 3-1. CT 오더가 있는지 확인
+            has_imaging_orders = DoctorToRadiologyOrder.objects.filter(
+                encounter=encounter,
+                status__in=['WAITING', 'IN_PROGRESS']
+            ).exists()
+
+            if has_imaging_orders:
+                # CT 오더 있음 → 촬영 대기로 전환
+                encounter.transition_to(Encounter.WorkflowState.WAITING_IMAGING)
+
+                # WebSocket 알림
+                send_queue_update_websocket(
+                    message=f"촬영 대기: {encounter.patient.name}",
+                    extra_data={
+                        "queue_type": "imaging",
+                        "imaging_waiting": cache_manager.get_waiting_count('imaging'),
+                        "imaging_in_progress": cache_manager.get_in_progress_count('imaging'),
+                    }
+                )
+                cache_manager.redis_client.delete('waiting_queue_list:imaging')
+                print(f"INFO: 모든 오더 접수 완료 → 촬영 대기: {encounter.encounter_id}")
+
+            else:
+                # CT 오더 없음 → 결과 대기 (환자 귀가)
+                encounter.transition_to(Encounter.WorkflowState.WAITING_RESULTS)
+                cache_manager.redis_client.delete('waiting_queue_list:clinic')
+                print(f"INFO: 모든 오더 접수 완료 → 결과 대기 (귀가): {encounter.encounter_id}")
 
             return Response({'message': '오더가 처리되었습니다.'}, status=status.HTTP_200_OK)
 
@@ -1101,6 +1157,47 @@ class CompleteVitalOrPhysicalView(APIView):
             order.status = LabOrder.OrderStatus.COMPLETED
             order.save()
 
+            # **FIX**: LAB 오더 완료 후 encounter 상태 업데이트
+            # 1. 다른 LAB 오더가 남아있는지 확인
+            has_pending_lab = LabOrder.objects.filter(
+                encounter=encounter,
+                status__in=['REQUESTED', 'WAITING', 'IN_PROGRESS']
+            ).exists()
+
+            # 2. IMAGING 오더가 대기 중인지 확인
+            has_pending_imaging = DoctorToRadiologyOrder.objects.filter(
+                encounter=encounter,
+                status__in=['REQUESTED', 'WAITING', 'IN_PROGRESS']
+            ).exists()
+
+            if has_pending_lab:
+                # 다른 LAB 오더가 남아있으면 상태 유지
+                print(f"INFO: LAB 오더 완료했지만 다른 LAB 오더 대기 중: {encounter.encounter_id}")
+            elif has_pending_imaging:
+                # IMAGING 오더가 남아있으면 촬영 대기로 전환
+                if encounter.workflow_state not in [Encounter.WorkflowState.WAITING_IMAGING, Encounter.WorkflowState.IN_IMAGING]:
+                    encounter.transition_to(Encounter.WorkflowState.WAITING_IMAGING)
+                    print(f"INFO: LAB 완료 후 IMAGING 대기로 전환: {encounter.encounter_id}")
+
+                    # 캐시 무효화 및 WebSocket 알림
+                    cache_manager.redis_client.delete('waiting_queue_list:imaging')
+                    send_queue_update_websocket(
+                        message=f"LAB 완료 후 촬영 대기: {patient.name}",
+                        extra_data={
+                            "queue_type": "imaging",
+                            "imaging_waiting": cache_manager.get_waiting_count('imaging'),
+                            "imaging_in_progress": cache_manager.get_in_progress_count('imaging'),
+                        }
+                    )
+            else:
+                # 모든 오더 완료 → 결과 대기로 전환
+                if encounter.workflow_state != Encounter.WorkflowState.COMPLETED:
+                    encounter.transition_to(Encounter.WorkflowState.WAITING_RESULTS)
+                    print(f"INFO: 모든 오더 완료 → 결과대기: {encounter.encounter_id}")
+
+                    # 캐시 무효화
+                    cache_manager.redis_client.delete('waiting_queue_list:clinic')
+
             return Response({
                 'message': '검사 데이터가 저장되었습니다.',
                 'encounter_id': encounter.encounter_id,
@@ -1112,3 +1209,45 @@ class CompleteVitalOrPhysicalView(APIView):
         except Exception as e:
             return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+
+class CancelEncounterView(APIView):
+    """Encounter 취소 API"""
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, encounter_id):
+        try:
+            encounter = Encounter.objects.get(encounter_id=encounter_id)
+            
+            # 이미 완료/취소된 경우 체크
+            if encounter.workflow_state in [Encounter.WorkflowState.COMPLETED, Encounter.WorkflowState.CANCELLED]:
+                 return Response({
+                    'message': f'이미 {encounter.get_workflow_state_display()} 상태입니다.'
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            # 상태 변경
+            encounter.transition_to(Encounter.WorkflowState.CANCELLED)
+            
+            # Redis 대기열 갱신은 transition_to 내부에서 처리됨 (decrement waiting/in_progress)
+            # 안전을 위해 캐시 무효화
+            cache_manager.redis_client.delete('waiting_queue_list')
+            
+            # WebSocket 알림
+            send_queue_update_websocket(
+                message=f"진료 취소: {encounter.patient.name}",
+                extra_data={
+                    "cancelled_encounter": {
+                        "id": encounter.encounter_id,
+                        "patient_name": encounter.patient.name
+                    }
+                }
+            )
+
+            return Response({
+                'message': '진료가 취소되었습니다.',
+                'encounter': EncounterSerializer(encounter).data
+            }, status=status.HTTP_200_OK)
+
+        except Encounter.DoesNotExist:
+            return Response({'error': 'Encounter not found'}, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
