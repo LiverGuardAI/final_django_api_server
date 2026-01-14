@@ -1,4 +1,3 @@
-# accounts/models.py
 from django.db import models
 from django.contrib.auth.models import AbstractUser
 from .fields import UserRoleField, DeptTypeField, WorkRoleField, DutyStatusField
@@ -29,8 +28,6 @@ class CustomUser(AbstractUser):
     def __str__(self):
         return f"{self.username} ({self.get_role_display()})"
 
-
-# accounts/models.py
 
 class Department(models.Model):
     """부서"""
@@ -101,6 +98,7 @@ class DutySchedule(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     schedule_status = DutyStatusField(choices=DutyStatus.choices, default='PENDING')
+    rejection_reason = models.TextField(blank=True, null=True, help_text="일정 거절 사유")
     
     class Meta:
         db_table = 'duty_schedules'
@@ -110,3 +108,22 @@ class DutySchedule(models.Model):
     
     def __str__(self):
         return f"{self.user.username} - {self.start_time.date()}"
+
+
+class Notification(models.Model):
+    """시스템 알림"""
+    notification_id = models.AutoField(primary_key=True)
+    user = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='notifications')
+    message_type = models.CharField(max_length=50) # 'schedule_create', 'schedule_update', 'schedule_reject'
+    message = models.TextField()
+    is_read = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'notifications'
+        verbose_name = '알림'
+        verbose_name_plural = '알림'
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.user.username}: {self.message[:20]}"
