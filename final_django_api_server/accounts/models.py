@@ -76,7 +76,7 @@ class OnlineStatus(models.Model):
     last_active = models.DateTimeField(auto_now=True)
     
     class Meta:
-        db_table = 'hospital"."online_status'
+        db_table = 'online_status'
         verbose_name = '근무 상태'
         verbose_name_plural = '근무 상태'
     
@@ -100,10 +100,10 @@ class DutySchedule(models.Model):
     shift_type = models.CharField(max_length=10, blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-    schedule_status = DutyStatusField(choices=DutyStatus.choices, default='CONFIRMED')
+    schedule_status = DutyStatusField(choices=DutyStatus.choices, default='PENDING')
     
     class Meta:
-        db_table = 'hospital"."duty_schedules'
+        db_table = 'duty_schedules'
         verbose_name = '근무 일정'
         verbose_name_plural = '근무 일정'
         ordering = ['-start_time']

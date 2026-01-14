@@ -1,5 +1,6 @@
 # administration/serializers.py
 from rest_framework import serializers
+from django.utils import timezone
 from doctor.models import Patient, Appointment, Encounter, MedicalRecord, LabOrder, DoctorToRadiologyOrder
 from datetime import date
 
@@ -8,8 +9,10 @@ from datetime import date
 # ---------------------------------------------------------
 class PatientSerializer(serializers.ModelSerializer):
     """환자 정보 직렬화 (조회, 등록, 수정 통합)"""
-
-    staff = serializers.PrimaryKeyRelatedField(read_only=True)
+    
+    # Annotate Fields
+    total_visits = serializers.IntegerField(read_only=True)
+    last_visit = serializers.DateTimeField(read_only=True)
     
     class Meta:
         model = Patient
@@ -17,7 +20,8 @@ class PatientSerializer(serializers.ModelSerializer):
         # staff: 뷰에서 자동 주입하므로 입력받지 않음
         # age: 생년월일 기반 자동 계산하므로 입력받지 않음
         # created_at, updated_at: 자동 생성
-        read_only_fields = ['created_at', 'updated_at', 'age']
+        # total_visits, last_visit: annotate로 생성
+        read_only_fields = ['created_at', 'updated_at', 'age', 'total_visits', 'last_visit']
 
     # --- [유효성 검사 (Validation)] ---
 
@@ -49,10 +53,6 @@ class PatientSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         """환자 생성 (POST)"""
-        # 1. 기본 상태 설정
-        validated_data['current_status'] = 'REGISTERED'
-
-        # 2. 나이 자동 계산
         if 'date_of_birth' in validated_data:
             validated_data['age'] = self._calculate_age(validated_data['date_of_birth'])
 
@@ -108,6 +108,9 @@ class EncounterSerializer(serializers.ModelSerializer):
     questionnaire_data = serializers.SerializerMethodField()
     is_returning_patient = serializers.SerializerMethodField()
     orders_status = serializers.SerializerMethodField()
+    result_waiting_label = serializers.SerializerMethodField()
+    result_waiting_started_at = serializers.SerializerMethodField()
+    waiting_duration_seconds = serializers.SerializerMethodField()
     
     def get_questionnaire_status(self, obj):
         if hasattr(obj, 'questionnaire'):
@@ -155,6 +158,38 @@ class EncounterSerializer(serializers.ModelSerializer):
             })
             
         return orders
+
+    def get_result_waiting_label(self, obj):
+        if obj.workflow_state != Encounter.WorkflowState.WAITING_RESULTS:
+            return None
+
+        labels = []
+
+        lab_orders = LabOrder.objects.filter(encounter=obj)
+        for order in lab_orders:
+            label = order.get_order_type_display()
+            if label and label not in labels:
+                labels.append(label)
+
+        img_orders = DoctorToRadiologyOrder.objects.filter(encounter=obj)
+        for order in img_orders:
+            name = f"{order.modality} ({order.body_part or 'ALL'})"
+            if name not in labels:
+                labels.append(name)
+
+        if labels:
+            return ' / '.join(labels)
+        return None
+
+    def get_result_waiting_started_at(self, obj):
+        if obj.workflow_state == Encounter.WorkflowState.WAITING_RESULTS:
+            return obj.state_entered_at
+        return None
+
+    def get_waiting_duration_seconds(self, obj):
+        if obj.workflow_state == Encounter.WorkflowState.WAITING_RESULTS and obj.state_entered_at:
+            return int((timezone.now() - obj.state_entered_at).total_seconds())
+        return None
 
     class Meta:
         model = Encounter

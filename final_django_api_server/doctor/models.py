@@ -49,7 +49,6 @@ class ScheduleDoctor(models.Model):
     schedule_type = DoctorScheduleTypeField(choices=DoctorScheduleType.choices)
     start_time = models.TimeField()
     end_time = models.TimeField()
-    clinic_room = models.CharField(max_length=20, blank=True, null=True)
     notes = models.TextField(blank=True, null=True)
     is_available = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -485,7 +484,7 @@ class DoctorToRadiologyOrder(models.Model):
     encounter = models.ForeignKey('Encounter', on_delete=models.CASCADE, db_column='encounter_id', null=True, blank=True)
     doctor = models.ForeignKey('Doctor', on_delete=models.RESTRICT, db_column='doctor_id')
 
-class Meta:
+    class Meta:
         db_table = 'hospital"."doctor_to_radiology_orders'
 
 

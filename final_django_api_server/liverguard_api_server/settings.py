@@ -88,7 +88,7 @@ DATABASES = {
         'PASSWORD': os.environ.get('POSTGRES_PASSWORD', 'postgres1234'),
         'HOST': os.environ.get('POSTGRES_HOST', '34.67.62.238'),
         'PORT': os.environ.get('POSTGRES_PORT', '5432'),
-        'CONN_MAX_AGE': 60,
+        'CONN_MAX_AGE': 0,
         'OPTIONS': {
             'options': '-c timezone=Asia/Seoul'
         },
@@ -164,7 +164,18 @@ CORS_ALLOWED_ORIGINS = [
     "http://localhost:5173",
     "http://localhost:3000", # 로컬 개발용 추가
 ]
-CORS_ALLOW_CREDENTIALS = True 
+CORS_ALLOW_CREDENTIALS = True
+
+CSRF_TRUSTED_ORIGINS = [
+    "http://34.67.62.238:5173",
+    "http://34.67.62.238:3000",
+    "http://localhost:5173",
+    "http://localhost:3000",
+    "http://127.0.0.1:5173",
+    "http://127.0.0.1:3000",
+    "http://localhost:8000",
+    "http://127.0.0.1:8000",
+]
 
 # REST Framework 설정
 REST_FRAMEWORK = {
