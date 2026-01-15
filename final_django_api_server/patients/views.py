@@ -1381,7 +1381,7 @@ def create_questionnaire(request):
         }
     }
     """
-    from doctor.models import Appointment, Encounter, Questionnaire
+    from doctor.models import Appointment, Encounter, Questionnaire, Patient
     from .models import UserProfile
 
     profile_id = request.data.get('profile_id')
@@ -1403,13 +1403,19 @@ def create_questionnaire(request):
         }, status=status.HTTP_404_NOT_FOUND)
 
     # 2. 연동된 Patient 확인
-    if not user_profile.linked_patient:
+    if not user_profile.linked_patient_id:
         return Response({
             'success': False,
             'message': '병원 환자 정보와 연동되지 않았습니다.'
         }, status=status.HTTP_400_BAD_REQUEST)
 
-    patient = user_profile.linked_patient
+    try:
+        patient = Patient.objects.get(patient_id=user_profile.linked_patient_id)
+    except Patient.DoesNotExist:
+        return Response({
+            'success': False,
+            'message': '연동된 환자 정보를 찾을 수 없습니다.'
+        }, status=status.HTTP_404_NOT_FOUND)
 
     # 3. 오늘 이후 승인된 예약 확인 (예약완료 상태만, 당일 + 사전예약 포함)
     today = date.today()
@@ -1432,6 +1438,17 @@ def create_questionnaire(request):
         return Response({
             'success': False,
             'message': '진료 대기열에 등록되지 않았습니다. 원무과에 문의해주세요.'
+        }, status=status.HTTP_400_BAD_REQUEST)
+
+    # 4-1. 진료대기/진료중 상태 체크 - 문진표 저장 불가
+    blocked_states = ['WAITING_CLINIC', 'IN_CLINIC']
+    if encounter.workflow_state in blocked_states:
+        state_label = '진료대기' if encounter.workflow_state == 'WAITING_CLINIC' else '진료중'
+        return Response({
+            'success': False,
+            'blocked': True,
+            'message': f'현재 {state_label} 상태입니다. 문진표를 저장할 수 없습니다.',
+            'workflow_state': encounter.workflow_state,
         }, status=status.HTTP_400_BAD_REQUEST)
 
     # 5. 이미 문진표가 있는지 확인
@@ -1477,7 +1494,7 @@ def get_questionnaire(request):
 
     GET /api/patients/questionnaire/?profile_id=1
     """
-    from doctor.models import Appointment, Encounter, Questionnaire
+    from doctor.models import Appointment, Encounter, Questionnaire, Patient
     from .models import UserProfile
 
     profile_id = request.query_params.get('profile_id')
@@ -1498,13 +1515,19 @@ def get_questionnaire(request):
         }, status=status.HTTP_404_NOT_FOUND)
 
     # 2. 연동된 Patient 확인
-    if not user_profile.linked_patient:
+    if not user_profile.linked_patient_id:
         return Response({
             'success': False,
             'message': '병원 환자 정보와 연동되지 않았습니다.'
         }, status=status.HTTP_400_BAD_REQUEST)
 
-    patient = user_profile.linked_patient
+    try:
+        patient = Patient.objects.get(patient_id=user_profile.linked_patient_id)
+    except Patient.DoesNotExist:
+        return Response({
+            'success': False,
+            'message': '연동된 환자 정보를 찾을 수 없습니다.'
+        }, status=status.HTTP_404_NOT_FOUND)
 
     # 3. 오늘 이후 승인된 예약 확인 (당일 + 사전예약 포함)
     today = date.today()
@@ -1529,6 +1552,19 @@ def get_questionnaire(request):
             'success': False,
             'has_questionnaire': False,
             'message': '진료 대기열에 등록되지 않았습니다.'
+        }, status=status.HTTP_200_OK)
+
+    # 4-1. 진료대기/진료중 상태 체크 - 문진표 수정 불가
+    blocked_states = ['WAITING_CLINIC', 'IN_CLINIC']
+    if encounter.workflow_state in blocked_states:
+        questionnaire = Questionnaire.objects.filter(encounter=encounter).first()
+        state_label = '진료대기' if encounter.workflow_state == 'WAITING_CLINIC' else '진료중'
+        return Response({
+            'success': False,
+            'blocked': True,
+            'has_questionnaire': questionnaire is not None,
+            'message': f'현재 {state_label} 상태입니다. 문진표를 수정할 수 없습니다.',
+            'workflow_state': encounter.workflow_state,
         }, status=status.HTTP_200_OK)
 
     # 5. 문진표 조회
