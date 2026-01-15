@@ -72,10 +72,43 @@ class ClinicConsumer(AsyncWebsocketConsumer):
 
     async def schedule_update(self, event):
         message_content = event.get('message', {})
-        
+
         await self.send(text_data=json.dumps({
             'type': 'schedule_update',
             'data': message_content
+        }))
+
+    async def patient_update(self, event):
+        """환자 정보 업데이트 알림"""
+        message = event.get('message', '')
+        data = event.get('data', {})
+
+        await self.send(text_data=json.dumps({
+            'type': 'patient_update',
+            'message': message,
+            'data': data
+        }))
+
+    async def stats_update(self, event):
+        """대시보드 통계 업데이트 알림"""
+        message = event.get('message', '')
+        data = event.get('data', {})
+
+        await self.send(text_data=json.dumps({
+            'type': 'stats_update',
+            'message': message,
+            'data': data
+        }))
+
+    async def questionnaire_update(self, event):
+        """문진표 업데이트 알림"""
+        message = event.get('message', '')
+        data = event.get('data', {})
+
+        await self.send(text_data=json.dumps({
+            'type': 'questionnaire_update',
+            'message': message,
+            'data': data
         }))
 
     @database_sync_to_async
