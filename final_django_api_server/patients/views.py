@@ -8,7 +8,7 @@ from django.contrib.auth.hashers import check_password
 from django.utils import timezone
 from accounts.models import DutySchedule
 from django.db import IntegrityError
-from datetime import date
+from datetime import date, datetime, time, timedelta
 
 from .models import UserProfile, AppSyncRequest
 from .serializers import SignupSerializer, LoginSerializer, AppSyncRequestSerializer
@@ -558,9 +558,9 @@ def get_departments(request):
     
     # DB에서 특정 진료과만 조회 (소화기내과, 영상의학과)
     departments = Department.objects.filter(dept_name__in=['소화기내과', '영상의학과']).order_by('dept_name')
-    
-    department_list = [{'department_name': dept.dept_name} for dept in departments]
-    
+
+    department_list = [{'dept_name': dept.dept_name} for dept in departments]
+
     return Response({
         'success': True,
         'departments': department_list
@@ -569,37 +569,291 @@ def get_departments(request):
 
 @api_view(['GET'])
 @permission_classes([AllowAny])
-def get_doctors(request):
+def get_doctor_available_dates(request):
     """
-    의사 목록 조회 API (진료과별)
-    
-    GET /api/patients/doctors/?department=소화기내과
+    의사의 근무 가능한 날짜 목록 조회 API
+
+    GET /api/patients/doctors/{doctor_id}/available-dates/?days=7
+
+    심야 근무(22:00~06:00)의 경우 시작일과 종료일 모두 포함
     """
     from doctor.models import Doctor
+    from accounts.models import DutySchedule
+    from datetime import datetime, timedelta, time as dt_time
+
+    doctor_id = request.query_params.get('doctor_id')
+    days = int(request.query_params.get('days', 7))
+
+    if not doctor_id:
+        return Response({
+            'success': False,
+            'message': '의사 ID를 입력해주세요.'
+        }, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        doctor = Doctor.objects.get(doctor_id=doctor_id)
+    except Doctor.DoesNotExist:
+        return Response({
+            'success': False,
+            'message': '존재하지 않는 의사입니다.'
+        }, status=status.HTTP_404_NOT_FOUND)
+
+    # 오늘부터 days일 동안의 날짜 범위
+    today = date.today()
+    end_date = today + timedelta(days=days - 1)
+
+    # UTC 기준으로 범위 계산 (KST -9시간)
+    range_start = datetime.combine(today, dt_time.min) - timedelta(hours=9)
+    range_end = datetime.combine(end_date, dt_time.max) - timedelta(hours=9)
+
+    # 해당 기간의 근무 일정 조회
+    duty_schedules = DutySchedule.objects.filter(
+        user=doctor.user,
+        work_role='DOCTOR',
+        schedule_status='CONFIRMED',
+        start_time__lte=range_end,
+        end_time__gte=range_start
+    ).order_by('start_time')
+
+    # 근무 가능한 날짜 수집 (심야 근무는 양일 모두 포함)
+    available_dates = set()
+
+    for schedule in duty_schedules:
+        # UTC -> KST 변환
+        start_kst = schedule.start_time + timedelta(hours=9)
+        end_kst = schedule.end_time + timedelta(hours=9)
+
+        # 시작일 추가
+        if today <= start_kst.date() <= end_date:
+            available_dates.add(start_kst.date().isoformat())
+
+        # 종료일이 다른 날이면 (심야 근무) 종료일도 추가
+        if start_kst.date() != end_kst.date():
+            if today <= end_kst.date() <= end_date:
+                available_dates.add(end_kst.date().isoformat())
+
+    # 정렬된 리스트로 변환
+    sorted_dates = sorted(list(available_dates))
+
+    return Response({
+        'success': True,
+        'doctor_id': doctor.doctor_id,
+        'doctor_name': doctor.name,
+        'available_dates': sorted_dates
+    }, status=status.HTTP_200_OK)
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def get_doctors(request):
+    """
+    의사 목록 조회 API (진료과별) - duty_schedules 포함
+
+    GET /api/patients/doctors/?department=소화기내과&date=2024-01-15
+    """
+    from doctor.models import Doctor
+    from accounts.models import DutySchedule
     from .serializers import DoctorListSerializer
-    
+    from datetime import datetime, timedelta
+    from django.db.models import Q
+
     department = request.query_params.get('department', None)
-    
+    selected_date_str = request.query_params.get('date', None)
+
     if not department:
         return Response({
             'success': False,
             'message': '진료과를 선택해주세요.'
         }, status=status.HTTP_400_BAD_REQUEST)
-    
-    # 해당 진료과의 의사 목록 조회
-    doctors = Doctor.objects.filter(department__dept_name=department).select_related('department').order_by('name')
-    
+
+    # 날짜 파싱 (없으면 오늘)
+    if selected_date_str:
+        try:
+            selected_date = datetime.strptime(selected_date_str, '%Y-%m-%d').date()
+        except ValueError:
+            selected_date = date.today()
+    else:
+        selected_date = date.today()
+
+    # 선택한 날짜의 시작과 끝 시간 계산 (UTC 기준, KST 00:00 = UTC 전날 15:00)
+    from datetime import time as dt_time
+    from collections import defaultdict
+
+    # KST 00:00:00 = UTC 전날 15:00:00, KST 23:59:59 = UTC 14:59:59
+    day_start = datetime.combine(selected_date, dt_time.min) - timedelta(hours=9)
+    day_end = datetime.combine(selected_date, dt_time.max) - timedelta(hours=9)
+
+    # 해당 진료과의 의사 목록 조회 (user도 함께 조회)
+    doctors = Doctor.objects.filter(
+        department__dept_name=department
+    ).select_related('department', 'user').order_by('name')
+
     if not doctors.exists():
         return Response({
             'success': False,
             'message': '해당 진료과에 의사가 없습니다.'
         }, status=status.HTTP_404_NOT_FOUND)
-    
-    serializer = DoctorListSerializer(doctors, many=True)
-    
+
+    # 모든 의사의 user_id 목록
+    doctor_user_ids = [doctor.user_id for doctor in doctors]
+
+    # 한 번의 쿼리로 해당 날짜의 모든 의사 근무 일정 조회
+    all_schedules = DutySchedule.objects.filter(
+        user_id__in=doctor_user_ids,
+        work_role='DOCTOR',
+        schedule_status='CONFIRMED',
+        start_time__lte=day_end,
+        end_time__gte=day_start
+    ).order_by('user_id', 'start_time')
+
+    # user_id별로 근무 일정 그룹화 (UTC+9 시간 보정)
+    schedule_map = defaultdict(list)
+    for schedule in all_schedules:
+        # UTC로 저장된 시간에 9시간 더하기 (KST)
+        start_kst = schedule.start_time + timedelta(hours=9)
+        end_kst = schedule.end_time + timedelta(hours=9)
+        schedule_map[schedule.user_id].append({
+            'start_time': start_kst.strftime('%H:%M'),
+            'end_time': end_kst.strftime('%H:%M'),
+            'shift_type': schedule.shift_type or '일반'
+        })
+
+    # 의사 목록 생성
+    doctor_list = []
+    for doctor in doctors:
+        working_hours = schedule_map.get(doctor.user_id, [])
+        doctor_list.append({
+            'doctor_id': doctor.doctor_id,
+            'name': doctor.name,
+            'department': doctor.department.dept_name,
+            'working_hours': working_hours,
+            'is_on_duty': len(working_hours) > 0
+        })
+
     return Response({
         'success': True,
-        'doctors': serializer.data
+        'doctors': doctor_list
+    }, status=status.HTTP_200_OK)
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def get_available_time_slots(request):
+    """
+    예약 가능한 시간 슬롯 조회 API
+
+    GET /api/patients/appointments/available-slots/?doctor_id=3&date=2025-01-14
+    """
+    from doctor.models import Doctor, Appointment
+    from accounts.models import DutySchedule
+    from django.db.models import Q
+    from datetime import datetime, time, timedelta
+
+    doctor_id = request.query_params.get('doctor_id')
+    selected_date_str = request.query_params.get('date')
+
+    if not doctor_id or not selected_date_str:
+        return Response({
+            'success': False,
+            'message': '의사 ID와 날짜를 입력해주세요.'
+        }, status=status.HTTP_400_BAD_REQUEST)
+
+    # 날짜 파싱
+    try:
+        selected_date = datetime.strptime(selected_date_str, '%Y-%m-%d').date()
+    except ValueError:
+        return Response({
+            'success': False,
+            'message': '날짜 형식이 올바르지 않습니다. (YYYY-MM-DD)'
+        }, status=status.HTTP_400_BAD_REQUEST)
+
+    # 의사 조회
+    try:
+        doctor = Doctor.objects.get(doctor_id=doctor_id)
+    except Doctor.DoesNotExist:
+        return Response({
+            'success': False,
+            'message': '존재하지 않는 의사입니다.'
+        }, status=status.HTTP_404_NOT_FOUND)
+
+    # 해당 날짜의 근무 일정 조회 (확정된 일정만)
+    # 선택한 날짜의 시작과 끝 시간 계산 (UTC 기준, KST -9시간)
+    from datetime import time as dt_time
+
+    day_start = datetime.combine(selected_date, dt_time.min) - timedelta(hours=9)
+    day_end = datetime.combine(selected_date, dt_time.max) - timedelta(hours=9)
+
+    duty_schedules = DutySchedule.objects.filter(
+        Q(user=doctor.user) &
+        Q(work_role='DOCTOR') &
+        Q(schedule_status='CONFIRMED') &
+        Q(start_time__lte=day_end) &
+        Q(end_time__gte=day_start)
+    ).order_by('start_time')
+
+    if not duty_schedules.exists():
+        return Response({
+            'success': False,
+            'message': '해당 날짜에 근무하지 않습니다.'
+        }, status=status.HTTP_400_BAD_REQUEST)
+
+    # 근무 시간 정보 생성 (UTC+9 시간 보정)
+    working_hours = []
+    for schedule in duty_schedules:
+        start_kst = schedule.start_time + timedelta(hours=9)
+        end_kst = schedule.end_time + timedelta(hours=9)
+        working_hours.append({
+            'start_time': start_kst.strftime('%H:%M'),
+            'end_time': end_kst.strftime('%H:%M'),
+        })
+
+    # 이미 예약된 시간 조회 (승인된 예약만 - 대기/마감은 캘린더에 표시 안함)
+    existing_appointments = Appointment.objects.filter(
+        doctor=doctor,
+        appointment_date=selected_date,
+        status='예약완료'
+    ).values_list('appointment_time', flat=True)
+
+    booked_times = set()
+    for apt_time in existing_appointments:
+        booked_times.add(apt_time.strftime('%H:%M'))
+
+    # 30분 단위 타임 슬롯 생성 (근무 시간 내에서만, UTC+9 보정)
+    available_slots = []
+    for schedule in duty_schedules:
+        # UTC로 저장된 시간에 9시간 더하기 (KST)
+        start_dt = schedule.start_time + timedelta(hours=9)
+        end_dt = schedule.end_time + timedelta(hours=9)
+
+        current_dt = start_dt.replace(minute=(start_dt.minute // 30) * 30, second=0, microsecond=0)
+
+        while current_dt < end_dt:
+            time_str = current_dt.strftime('%H:%M')
+
+            # 해당 날짜의 슬롯만 포함 (KST 기준)
+            if current_dt.date() == selected_date:
+                slot_info = {
+                    'time': time_str,
+                    'is_available': time_str not in booked_times
+                }
+                available_slots.append(slot_info)
+
+            current_dt += timedelta(minutes=30)
+
+    # 중복 제거 및 정렬
+    seen = set()
+    unique_slots = []
+    for slot in available_slots:
+        if slot['time'] not in seen:
+            seen.add(slot['time'])
+            unique_slots.append(slot)
+
+    unique_slots.sort(key=lambda x: x['time'])
+
+    return Response({
+        'success': True,
+        'available_slots': unique_slots,
+        'working_hours': working_hours
     }, status=status.HTTP_200_OK)
 
 
@@ -630,8 +884,24 @@ def create_appointment(request):
     
     profile_id = serializer.validated_data['profile_id']
     doctor_id = serializer.validated_data['doctor_id']
+    appointment_date_str = request.data.get('appointment_date')  # "YYYY-MM-DD" 형식
+    appointment_time_str = request.data.get('appointment_time')  # "HH:MM" 형식
     notes = serializer.validated_data.get('notes', '')
-    
+
+    print(f"📅 [create_appointment] 받은 데이터: appointment_date={appointment_date_str}, appointment_time={appointment_time_str}")
+
+    # 날짜 파싱
+    if appointment_date_str:
+        try:
+            appointment_date = datetime.strptime(appointment_date_str, '%Y-%m-%d').date()
+        except ValueError:
+            return Response({
+                'success': False,
+                'message': '올바른 날짜 형식이 아닙니다. (YYYY-MM-DD)'
+            }, status=status.HTTP_400_BAD_REQUEST)
+    else:
+        appointment_date = date.today()
+
     # 1. UserProfile 조회
     try:
         profile = UserProfile.objects.get(profile_id=profile_id)
@@ -666,44 +936,121 @@ def create_appointment(request):
             'message': '존재하지 않는 의사입니다.'
         }, status=status.HTTP_404_NOT_FOUND)
     
-    # 5. 당일 예약 생성
-    today = date.today()
-    from datetime import time
-    
-    # 당일 예약 시간은 현재 시각 기준 + 10분으로 설정
-    from datetime import datetime, timedelta
-    now = datetime.now()
-    appointment_time = (now + timedelta(minutes=10)).time()
-
-    # 5. duty schedule check
-    dt = datetime.combine(today, appointment_time)
-    if timezone.is_naive(dt):
-        dt = timezone.make_aware(dt, timezone.get_current_timezone())
-    if not DutySchedule.objects.filter(
-        user_id=doctor.user_id,
-        schedule_status='CONFIRMED',
-        start_time__lt=dt,
-        end_time__gt=dt
-    ).exists():
+    # 5. 시간 파싱
+    try:
+        # "HH:MM" 형식을 time 객체로 변환
+        hour, minute = map(int, appointment_time_str.split(':'))
+        appointment_time = time(hour, minute)
+    except (ValueError, AttributeError):
         return Response({
             'success': False,
-            'message': '해당 시간은 근무 일정이 아닙니다.'
+            'message': '올바른 시간 형식이 아닙니다. (HH:MM)'
         }, status=status.HTTP_400_BAD_REQUEST)
 
+    # 6. 의사 근무 일정 확인 (duty_schedules) - 확정된 일정만
+    from django.db.models import Q
 
-    
+    # 선택한 날짜의 시작과 끝 시간 계산 (UTC 기준, KST -9시간)
+    day_start = datetime.combine(appointment_date, time.min) - timedelta(hours=9)
+    day_end = datetime.combine(appointment_date, time.max) - timedelta(hours=9)
+
+    duty_schedules = DutySchedule.objects.filter(
+        Q(user=doctor.user) &
+        Q(work_role='DOCTOR') &
+        Q(schedule_status='CONFIRMED') &
+        Q(start_time__lte=day_end) &
+        Q(end_time__gte=day_start)
+    ).order_by('start_time')
+
+    # 근무 중이 아니면 예약 불가
+    if not duty_schedules.exists():
+        return Response({
+            'success': False,
+            'message': '선택한 의사가 해당 날짜에 근무하지 않습니다.',
+            'is_not_on_duty': True
+        }, status=status.HTTP_400_BAD_REQUEST)
+
+    # 8. 선택한 시간이 근무 시간 내인지 확인 (UTC+9 보정)
+    is_within_duty_hours = False
+    for schedule in duty_schedules:
+        # UTC로 저장된 시간에 9시간 더하기 (KST)
+        schedule_start = (schedule.start_time + timedelta(hours=9)).time()
+        schedule_end = (schedule.end_time + timedelta(hours=9)).time()
+
+        if schedule_start <= appointment_time <= schedule_end:
+            is_within_duty_hours = True
+            break
+
+    if not is_within_duty_hours:
+        return Response({
+            'success': False,
+            'message': '선택한 시간은 의사의 근무 시간이 아닙니다.',
+        }, status=status.HTTP_400_BAD_REQUEST)
+
+    # 10. 해당 시간에 이미 승인된 예약이 있는지 확인
+    existing_appointment_at_time = Appointment.objects.filter(
+        doctor=doctor,
+        appointment_date=appointment_date,
+        appointment_time=appointment_time,
+        status='예약완료'
+    ).first()
+
+    if existing_appointment_at_time:
+        return Response({
+            'success': False,
+            'message': '선택한 시간에 이미 예약이 있습니다. 다른 시간을 선택해주세요.',
+        }, status=status.HTTP_400_BAD_REQUEST)
+
     try:
+        # 예약 타입 결정 (당일이면 당일예약, 아니면 사전예약)
+        is_same_day = (appointment_date == date.today())
+        apt_type = '당일예약' if is_same_day else '사전예약'
+
         appointment = Appointment.objects.create(
             patient=patient,
             doctor=doctor,
-            appointment_date=today,
+            appointment_date=appointment_date,
             appointment_time=appointment_time,
-            appointment_type='당일예약',
+            appointment_type=apt_type,
             status='대기',
             department=doctor.department.dept_name,
             notes=notes
         )
-        
+
+        # WebSocket으로 실시간 알림 전송
+        from channels.layers import get_channel_layer
+        from asgiref.sync import async_to_sync
+
+        channel_layer = get_channel_layer()
+        if channel_layer:
+            try:
+                async_to_sync(channel_layer.group_send)(
+                    'clinic_dashboard',
+                    {
+                        'type': 'update_queue',
+                        'message': '새로운 예약이 접수되었습니다.',
+                        'data': {
+                            'event_type': 'new_appointment',
+                            'appointment': {
+                                'appointment_id': appointment.appointment_id,
+                                'patient_name': patient.name,
+                                'patient_id': patient.patient_id,
+                                'doctor_id': doctor.doctor_id,
+                                'doctor_name': doctor.name,
+                                'department': doctor.department.dept_name,
+                                'appointment_date': appointment.appointment_date.isoformat(),
+                                'appointment_time': appointment.appointment_time.strftime('%H:%M'),
+                                'status': appointment.status,
+                                'notes': notes,
+                                'appointment_type': '당일예약',
+                            }
+                        }
+                    }
+                )
+                print(f"✅ WebSocket 알림 전송 성공: 새 예약 {appointment.appointment_id}")
+            except Exception as ws_error:
+                print(f"❌ WebSocket 알림 전송 실패: {ws_error}")
+
         return Response({
             'success': True,
             'message': '예약이 완료되었습니다.',
@@ -716,7 +1063,7 @@ def create_appointment(request):
                 'status': appointment.status
             }
         }, status=status.HTTP_201_CREATED)
-        
+
     except Exception as e:
         return Response({
             'success': False,
@@ -726,20 +1073,102 @@ def create_appointment(request):
 
 @api_view(['GET'])
 @permission_classes([AllowAny])
+def check_appointment_status(request):
+    """
+    사용자의 당일 예약 상태 확인 API (앱 전용)
+
+    GET /api/patients/appointments/status/?profile_id=1
+    """
+    from doctor.models import Appointment, Patient
+    from datetime import date
+
+    profile_id = request.query_params.get('profile_id')
+
+    if not profile_id:
+        return Response({
+            'success': False,
+            'message': 'profile_id가 필요합니다.'
+        }, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        profile = UserProfile.objects.get(profile_id=profile_id)
+    except UserProfile.DoesNotExist:
+        return Response({
+            'success': False,
+            'message': '존재하지 않는 사용자입니다.'
+        }, status=status.HTTP_404_NOT_FOUND)
+
+    if not profile.is_verified or not profile.linked_patient_id:
+        return Response({
+            'success': True,
+            'has_appointment': False,
+            'message': '병원 연동이 필요합니다.'
+        }, status=status.HTTP_200_OK)
+
+    try:
+        patient = Patient.objects.get(patient_id=profile.linked_patient_id)
+    except Patient.DoesNotExist:
+        return Response({
+            'success': True,
+            'has_appointment': False,
+            'message': '연동된 환자 정보를 찾을 수 없습니다.'
+        }, status=status.HTTP_200_OK)
+
+    # 오늘 이후 예약 확인 (당일 + 사전예약 포함)
+    today = date.today()
+    appointment = Appointment.objects.filter(
+        patient=patient,
+        appointment_date__gte=today,
+        status__in=['대기', '예약완료']
+    ).order_by('appointment_date', 'appointment_time').first()
+
+    if appointment:
+        return Response({
+            'success': True,
+            'has_appointment': True,
+            'appointment': {
+                'appointment_id': appointment.appointment_id,
+                'appointment_date': appointment.appointment_date.isoformat(),
+                'appointment_time': appointment.appointment_time.strftime('%H:%M'),
+                'doctor_name': appointment.doctor.name if appointment.doctor else None,
+                'department': appointment.department,
+                'status': appointment.status,
+                'notes': appointment.notes
+            }
+        }, status=status.HTTP_200_OK)
+    else:
+        return Response({
+            'success': True,
+            'has_appointment': False,
+            'message': '당일 예약이 없습니다.'
+        }, status=status.HTTP_200_OK)
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
 def get_appointments(request):
     """
     예약 목록 조회 API (원무과용)
-    
-    GET /api/patients/appointments/list/?status=대기
+
+    GET /api/patients/appointments/list/?status=대기&date=2025-01-16
     """
     from doctor.models import Appointment
-    
+    from datetime import datetime
+
     status_filter = request.query_params.get('status', None)
-    
+    date_filter = request.query_params.get('date', None)
+
     appointments = Appointment.objects.select_related('patient', 'doctor').order_by('-created_at')
-    
+
     if status_filter:
         appointments = appointments.filter(status=status_filter)
+
+    if date_filter:
+        try:
+            filter_date = datetime.strptime(date_filter, '%Y-%m-%d').date()
+            appointments = appointments.filter(appointment_date=filter_date)
+        except ValueError:
+            pass  # 잘못된 날짜 형식이면 무시
     
     # 예약 목록 직렬화
     appointment_list = []
@@ -752,6 +1181,10 @@ def get_appointments(request):
             'status': appt.status,
             'department': appt.department,
             'notes': appt.notes,
+            'patient_name': appt.patient.name if appt.patient else None,
+            'patient_id': appt.patient.patient_id if appt.patient else None,
+            'doctor_name': appt.doctor.name if appt.doctor else None,
+            'doctor_id': appt.doctor.doctor_id if appt.doctor else None,
             'patient': {
                 'patient_id': appt.patient.patient_id,
                 'name': appt.patient.name,
@@ -781,10 +1214,13 @@ def approve_appointment(request, appointment_id):
 
     워크플로우:
     1. Appointment 조회
-    2. Encounter 생성 (진료 대기열에 추가)
-    3. Appointment 상태를 '예약완료'로 변경
+    2. 근무 일정 확인
+    3. 중복 예약 확인
+    4. Appointment 상태를 '예약완료'로 변경
+
+    Note: Encounter(진료 대기열)는 원무과에서 수동으로 추가합니다.
     """
-    from doctor.models import Appointment, Encounter
+    from doctor.models import Appointment
     from datetime import datetime
 
     try:
@@ -802,7 +1238,6 @@ def approve_appointment(request, appointment_id):
             'message': f'이미 처리된 예약입니다. (현재 상태: {appointment.status})'
         }, status=status.HTTP_400_BAD_REQUEST)
 
-
     # duty schedule check
     dt = datetime.combine(appointment.appointment_date, appointment.appointment_time)
     if timezone.is_naive(dt):
@@ -818,26 +1253,31 @@ def approve_appointment(request, appointment_id):
             'message': '해당 시간은 근무 일정이 아닙니다.'
         }, status=status.HTTP_400_BAD_REQUEST)
 
-    # Encounter 생성 (진료 대기열에 추가)
     try:
-        encounter = Encounter.objects.create(
-            patient=appointment.patient,
-            doctor=appointment.doctor,
-            status='IN_PROGRESS',  # FHIR 상태
-            workflow_state='WAITING_CLINIC',  # 진료 대기
-            encounter_date=appointment.appointment_date,
-            scheduled_time=datetime.combine(appointment.appointment_date, appointment.appointment_time),
-            visit_reason=appointment.notes or '당일 예약',
-        )
+        today = appointment.appointment_date
+        requested_time = appointment.appointment_time
 
-        # 예약 상태를 '예약완료'로 변경
+        # 해당 시간에 이미 승인된 예약이 있는지 확인 (승인된 예약만 체크)
+        existing_approved = Appointment.objects.filter(
+            doctor=appointment.doctor,
+            appointment_date=today,
+            appointment_time=requested_time,
+            status='예약완료'
+        ).exists()
+
+        if existing_approved:
+            return Response({
+                'success': False,
+                'message': f'해당 시간({requested_time.strftime("%H:%M")})에 이미 승인된 예약이 있습니다. 이 예약을 거절해주세요.'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        # 예약 상태를 '예약완료'로 변경 (Encounter는 생성하지 않음)
         appointment.status = '예약완료'
         appointment.save()
 
         return Response({
             'success': True,
-            'message': '예약이 승인되었습니다. 환자가 진료 대기열에 추가되었습니다.',
-            'encounter_id': encounter.encounter_id,
+            'message': '예약이 승인되었습니다.',
             'appointment': {
                 'appointment_id': appointment.appointment_id,
                 'status': appointment.status,
@@ -845,11 +1285,13 @@ def approve_appointment(request, appointment_id):
                 'doctor_name': appointment.doctor.name if appointment.doctor else None,
                 'department': appointment.department,
                 'appointment_date': appointment.appointment_date.isoformat(),
-                'appointment_time': appointment.appointment_time.strftime('%H:%M'),
+                'appointment_time': requested_time.strftime('%H:%M'),
             },
         }, status=status.HTTP_200_OK)
-        
+
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         return Response({
             'success': False,
             'message': f'예약 승인 중 오류가 발생했습니다: {str(e)}'
@@ -916,3 +1358,224 @@ def reject_appointment(request, appointment_id):
             'notes': appointment.notes,
         },
     }, status=status.HTTP_200_OK)
+
+
+# ==================== 문진표 관련 API ====================
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def create_questionnaire(request):
+    """
+    문진표 작성 API (환자 앱용)
+
+    POST /api/patients/questionnaire/
+    {
+        "profile_id": 1,
+        "data": {
+            "chief_complaint": "복부 불편감",
+            "symptom_duration": "2주",
+            "pain_level": 5,
+            "symptoms": {"abdominalPain": true, "nausea": true, ...},
+            "medical_history": {...},
+            ...
+        }
+    }
+    """
+    from doctor.models import Appointment, Encounter, Questionnaire
+    from .models import UserProfile
+
+    profile_id = request.data.get('profile_id')
+    questionnaire_data = request.data.get('data', {})
+
+    if not profile_id:
+        return Response({
+            'success': False,
+            'message': 'profile_id가 필요합니다.'
+        }, status=status.HTTP_400_BAD_REQUEST)
+
+    # 1. UserProfile 조회
+    try:
+        user_profile = UserProfile.objects.get(profile_id=profile_id)
+    except UserProfile.DoesNotExist:
+        return Response({
+            'success': False,
+            'message': '사용자를 찾을 수 없습니다.'
+        }, status=status.HTTP_404_NOT_FOUND)
+
+    # 2. 연동된 Patient 확인
+    if not user_profile.linked_patient:
+        return Response({
+            'success': False,
+            'message': '병원 환자 정보와 연동되지 않았습니다.'
+        }, status=status.HTTP_400_BAD_REQUEST)
+
+    patient = user_profile.linked_patient
+
+    # 3. 오늘 이후 승인된 예약 확인 (예약완료 상태만, 당일 + 사전예약 포함)
+    today = date.today()
+    appointment = Appointment.objects.filter(
+        patient=patient,
+        appointment_date__gte=today,
+        status='예약완료'
+    ).order_by('appointment_date', 'appointment_time').first()
+
+    if not appointment:
+        return Response({
+            'success': False,
+            'message': '승인된 진료 예약이 없습니다.'
+        }, status=status.HTTP_400_BAD_REQUEST)
+
+    # 4. 해당 예약에 연결된 Encounter 찾기
+    try:
+        encounter = Encounter.objects.get(appointment=appointment)
+    except Encounter.DoesNotExist:
+        return Response({
+            'success': False,
+            'message': '진료 대기열에 등록되지 않았습니다. 원무과에 문의해주세요.'
+        }, status=status.HTTP_400_BAD_REQUEST)
+
+    # 5. 이미 문진표가 있는지 확인
+    existing_questionnaire = Questionnaire.objects.filter(encounter=encounter).first()
+    if existing_questionnaire:
+        # 기존 문진표 업데이트
+        existing_questionnaire.data = questionnaire_data
+        existing_questionnaire.status = Questionnaire.QStatus.COMPLETED
+        existing_questionnaire.save()
+
+        # WebSocket으로 문진표 업데이트 알림
+        _send_questionnaire_update(encounter, patient, 'updated')
+
+        return Response({
+            'success': True,
+            'message': '문진표가 수정되었습니다.',
+            'questionnaire_id': existing_questionnaire.questionnaire_id,
+        }, status=status.HTTP_200_OK)
+
+    # 6. 새 문진표 생성
+    questionnaire = Questionnaire.objects.create(
+        encounter=encounter,
+        patient=patient,
+        data=questionnaire_data,
+        status=Questionnaire.QStatus.COMPLETED,
+    )
+
+    # WebSocket으로 문진표 생성 알림
+    _send_questionnaire_update(encounter, patient, 'created')
+
+    return Response({
+        'success': True,
+        'message': '문진표가 저장되었습니다.',
+        'questionnaire_id': questionnaire.questionnaire_id,
+    }, status=status.HTTP_201_CREATED)
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def get_questionnaire(request):
+    """
+    문진표 조회 API (환자 앱용)
+
+    GET /api/patients/questionnaire/?profile_id=1
+    """
+    from doctor.models import Appointment, Encounter, Questionnaire
+    from .models import UserProfile
+
+    profile_id = request.query_params.get('profile_id')
+
+    if not profile_id:
+        return Response({
+            'success': False,
+            'message': 'profile_id가 필요합니다.'
+        }, status=status.HTTP_400_BAD_REQUEST)
+
+    # 1. UserProfile 조회
+    try:
+        user_profile = UserProfile.objects.get(profile_id=profile_id)
+    except UserProfile.DoesNotExist:
+        return Response({
+            'success': False,
+            'message': '사용자를 찾을 수 없습니다.'
+        }, status=status.HTTP_404_NOT_FOUND)
+
+    # 2. 연동된 Patient 확인
+    if not user_profile.linked_patient:
+        return Response({
+            'success': False,
+            'message': '병원 환자 정보와 연동되지 않았습니다.'
+        }, status=status.HTTP_400_BAD_REQUEST)
+
+    patient = user_profile.linked_patient
+
+    # 3. 오늘 이후 승인된 예약 확인 (당일 + 사전예약 포함)
+    today = date.today()
+    appointment = Appointment.objects.filter(
+        patient=patient,
+        appointment_date__gte=today,
+        status='예약완료'
+    ).order_by('appointment_date', 'appointment_time').first()
+
+    if not appointment:
+        return Response({
+            'success': False,
+            'has_questionnaire': False,
+            'message': '승인된 진료 예약이 없습니다.'
+        }, status=status.HTTP_200_OK)
+
+    # 4. 해당 예약에 연결된 Encounter 찾기
+    try:
+        encounter = Encounter.objects.get(appointment=appointment)
+    except Encounter.DoesNotExist:
+        return Response({
+            'success': False,
+            'has_questionnaire': False,
+            'message': '진료 대기열에 등록되지 않았습니다.'
+        }, status=status.HTTP_200_OK)
+
+    # 5. 문진표 조회
+    questionnaire = Questionnaire.objects.filter(encounter=encounter).first()
+
+    if not questionnaire:
+        return Response({
+            'success': True,
+            'has_questionnaire': False,
+            'message': '작성된 문진표가 없습니다.',
+        }, status=status.HTTP_200_OK)
+
+    return Response({
+        'success': True,
+        'has_questionnaire': True,
+        'questionnaire': {
+            'questionnaire_id': questionnaire.questionnaire_id,
+            'status': questionnaire.status,
+            'data': questionnaire.data,
+            'created_at': questionnaire.created_at.isoformat(),
+            'updated_at': questionnaire.updated_at.isoformat(),
+        }
+    }, status=status.HTTP_200_OK)
+
+
+def _send_questionnaire_update(encounter, patient, action):
+    """
+    문진표 업데이트 시 WebSocket으로 알림 전송
+    """
+    from channels.layers import get_channel_layer
+    from asgiref.sync import async_to_sync
+
+    try:
+        channel_layer = get_channel_layer()
+        if channel_layer:
+            async_to_sync(channel_layer.group_send)(
+                'clinic_dashboard',
+                {
+                    'type': 'questionnaire_update',
+                    'data': {
+                        'action': action,
+                        'encounter_id': encounter.encounter_id,
+                        'patient_id': patient.patient_id,
+                        'patient_name': patient.name,
+                        'has_questionnaire': True,
+                    }
+                }
+            )
+    except Exception as e:
+        print(f"WebSocket 문진표 알림 전송 실패: {e}")

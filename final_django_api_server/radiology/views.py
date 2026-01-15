@@ -1,6 +1,7 @@
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
+from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny
 from django.db.models import Q
 from django.utils import timezone
@@ -330,6 +331,37 @@ class EndFilmingView(APIView):
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
+# ==================== 영상의학과 의사 목록 API ====================
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def get_radiologist_list(request):
+    """
+    영상의학과 의사 목록 조회 API
+
+    GET /api/radiology/list/
+    """
+    from .models import Radiology
+
+    radiologists = Radiology.objects.select_related('department').all().order_by('name')
+    
+    radiologist_list = []
+    for radiologist in radiologists:
+        radiologist_list.append({
+            'radiologic_id': radiologist.radiologic_id,
+            'name': radiologist.name,
+            'department': {
+                'dept_name': radiologist.department.dept_name if radiologist.department else '영상의학과'
+            },
+            'phone': radiologist.phone,
+        })
+    
+    return Response({
+        'success': True,
+        'results': radiologist_list
+    }, status=status.HTTP_200_OK)
+<<<<<<< Updated upstream
+
+
 class ImagingStatsView(APIView):
     """영상의학과 통계 API"""
     permission_classes = [AllowAny]  # TODO: 나중에 IsRadiologist로 변경 필요
@@ -405,3 +437,5 @@ class ImagingStatsView(APIView):
                 },
             }
         }, status=status.HTTP_200_OK)
+=======
+>>>>>>> Stashed changes
