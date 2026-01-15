@@ -70,6 +70,7 @@ class ClinicConsumer(AsyncWebsocketConsumer):
             'data': data
         }))
 
+<<<<<<< Updated upstream
     async def schedule_update(self, event):
         message_content = event.get('message', {})
         
@@ -93,3 +94,13 @@ class ClinicConsumer(AsyncWebsocketConsumer):
             print(f"JWT Decode Error: {e}")
             return None
         return None
+=======
+    # 문진표 업데이트 알림 핸들러
+    async def questionnaire_update(self, event):
+        data = event.get('data', {})
+
+        await self.send(text_data=json.dumps({
+            'type': 'questionnaire_update',
+            'data': data
+        }))
+>>>>>>> Stashed changes

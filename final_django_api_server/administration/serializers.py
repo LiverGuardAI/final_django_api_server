@@ -74,6 +74,13 @@ class AppointmentSerializer(serializers.ModelSerializer):
     """예약 정보 조회용"""
     patient_name = serializers.CharField(source='patient.name', read_only=True)
     doctor_name = serializers.CharField(source='doctor.name', read_only=True)
+    appointment_time = serializers.SerializerMethodField()
+
+    def get_appointment_time(self, obj):
+        """시간을 HH:MM 형식으로 반환"""
+        if obj.appointment_time:
+            return obj.appointment_time.strftime('%H:%M')
+        return None
 
     class Meta:
         model = Appointment
