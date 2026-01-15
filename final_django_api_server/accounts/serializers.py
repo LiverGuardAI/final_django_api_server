@@ -1,11 +1,18 @@
 from rest_framework import serializers
-from .models import DutySchedule, CustomUser, Notification
+from .models import DutySchedule, CustomUser, Notification, UserSchedule
 
 class NotificationSerializer(serializers.ModelSerializer):
     class Meta:
         model = Notification
         fields = ['notification_id', 'user', 'message_type', 'message', 'is_read', 'created_at']
         read_only_fields = ['notification_id', 'created_at']
+
+
+class UserScheduleSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = UserSchedule
+        fields = ['schedule_id', 'user', 'schedule_date', 'schedule_type', 'start_time', 'end_time', 'notes', 'created_at']
+        read_only_fields = ['created_at', 'user']
 
 
 class DutyScheduleSerializer(serializers.ModelSerializer):
