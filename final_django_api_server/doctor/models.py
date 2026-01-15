@@ -40,9 +40,6 @@ class ScheduleDoctor(models.Model):
     class DoctorScheduleType(models.TextChoices):
         OUTPATIENT = 'OUTPATIENT', '외래'
         SURGERY = 'SURGERY', '수술'
-        CONFERENCE = 'CONFERENCE', '회의'
-        VACATION = 'VACATION', '휴가'
-        OTHER = 'OTHER', '기타'
 
     schedule_id = models.AutoField(primary_key=True)
     schedule_date = models.DateField()

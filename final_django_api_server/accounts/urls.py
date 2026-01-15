@@ -15,10 +15,11 @@ urlpatterns = [
 ]
 
 from rest_framework.routers import DefaultRouter
-from .views import DutyScheduleViewSet, NotificationViewSet
+from .views import DutyScheduleViewSet, NotificationViewSet, UserScheduleViewSet
 
 router = DefaultRouter()
 router.register(r'schedules', DutyScheduleViewSet)
+router.register(r'user-schedules', UserScheduleViewSet)
 router.register(r'notifications', NotificationViewSet)
 
 urlpatterns += router.urls

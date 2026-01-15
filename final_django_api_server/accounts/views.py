@@ -586,3 +586,35 @@ class BulkScheduleView(APIView):
         except Exception as e:
             return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+
+class UserScheduleViewSet(viewsets.ModelViewSet):
+    """
+    개인 일정(휴가/학회 등) 관리 API
+    - 모든 직원이 자신의 개인 일정을 등록/수정/삭제 가능
+    """
+    from .models import UserSchedule
+    from .serializers import UserScheduleSerializer
+    
+    queryset = UserSchedule.objects.all()
+    serializer_class = UserScheduleSerializer
+    authentication_classes = [SessionAuthentication, JWTAuthentication]
+    
+    def get_queryset(self):
+        # 본인의 일정만 조회
+        user = self.request.user
+        queryset = super().get_queryset().filter(user=user)
+        
+        start_date = self.request.query_params.get('start_date')
+        end_date = self.request.query_params.get('end_date')
+        
+        if start_date:
+            queryset = queryset.filter(schedule_date__gte=start_date)
+        if end_date:
+            queryset = queryset.filter(schedule_date__lte=end_date)
+            
+        return queryset
+
+    def perform_create(self, serializer):
+        # 생성 시 user 자동 할당
+        serializer.save(user=self.request.user)
+
