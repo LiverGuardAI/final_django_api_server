@@ -143,7 +143,7 @@ class Notification(models.Model):
 
 class UserSchedule(models.Model):
     """
-    모든 직원을 위한 공통 개인 일정
+    모든 직원을 위한 공통 개인 일정 관리 
     (휴가, 학회, 기타 등)
     """
     class ScheduleType(models.TextChoices):
