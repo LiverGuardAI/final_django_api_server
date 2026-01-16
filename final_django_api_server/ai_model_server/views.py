@@ -6,6 +6,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import AllowAny, IsAuthenticated
+from services.report_llm import generate_tumor_analysis_report
 
 # 기존 팀원분이 만든 Celery Task 임포트
 from .tasks import (
@@ -521,3 +522,10 @@ class DDIAnalysisView(APIView):
             return Response({"error": "AI 분석 엔진이 응답하지 않습니다."}, status=503)
         except Exception as e:
             return Response({"error": f"서버 내부 오류: {str(e)}"}, status=500)
+        
+        
+class ReportGenerateView(APIView):
+    def post(self, request):
+        findings = request.data  # 또는 DB에서 불러온 findings_json
+        report_text = generate_tumor_analysis_report(findings)
+        return Response({"report": report_text})

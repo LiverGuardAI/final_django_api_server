@@ -1,5 +1,13 @@
 from django.urls import path
-from .views import RadiologyDashboardView, DICOMStudyListView, WaitlistView, StartFilmingView, EndFilmingView, ImagingStatsView
+from .views import (
+    RadiologyDashboardView,
+    DICOMStudyListView,
+    WaitlistView,
+    StartFilmingView,
+    EndFilmingView,
+    ImagingStatsView,
+    TumorAnalysisView,
+)
 
 urlpatterns = [
     path('dashboard/', RadiologyDashboardView.as_view(), name='radiology_dashboard'),
@@ -8,4 +16,5 @@ urlpatterns = [
     path('waitlist/start-filming/', StartFilmingView.as_view(), name='start_filming'),
     path('waitlist/end-filming/', EndFilmingView.as_view(), name='end_filming'),
     path('stats/', ImagingStatsView.as_view(), name='imaging_stats'),
+    path('tumor-analysis/', TumorAnalysisView.as_view(), name='tumor_analysis'),
 ]
