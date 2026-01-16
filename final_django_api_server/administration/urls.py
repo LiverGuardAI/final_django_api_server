@@ -17,12 +17,14 @@ from .views import (
     ConfirmOrderView,
     CompleteVitalOrPhysicalView,
     CancelEncounterView,
+    DailyPatientStatusView,
 )
 
 urlpatterns = [
     # 대시보드
     path('dashboard/', AdministrationDashboardView.as_view(), name='administration_dashboard'),
     path('dashboard/stats/', DashboardStatsView.as_view(), name='dashboard_stats'),
+    path('dashboard/patient-status/', DailyPatientStatusView.as_view(), name='patient_status_stats'),
 
     # 환자 관리
     path('patients/', PatientListView.as_view(), name='patient_list'),

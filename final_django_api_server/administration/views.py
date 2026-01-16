@@ -371,6 +371,10 @@ class EncounterListView(APIView):
 
         if patient_id:
             encounters = encounters.filter(patient_id=patient_id)
+        
+        date_param = request.query_params.get('date', None)
+        if date_param:
+            encounters = encounters.filter(start_time__date=date_param)
 
         encounters = encounters.order_by('-start_time')
         serializer = EncounterSerializer(encounters, many=True)
@@ -1251,3 +1255,55 @@ class CancelEncounterView(APIView):
             return Response({'error': 'Encounter not found'}, status=status.HTTP_404_NOT_FOUND)
         except Exception as e:
             return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+class DailyPatientStatusView(APIView):
+    """오늘의 환자 현황판을 위한 최적화된 API"""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        today = timezone.now().date()
+        
+        # 기본 쿼리셋 (오늘 데이터만, 시간순 정렬)
+        queryset = Encounter.objects.filter(start_time__date=today).select_related(
+            'patient', 'assigned_doctor'
+        ).order_by('-state_entered_at')
+
+        # 1. 통계 집계 (DB 레벨 계산)
+        stats = queryset.aggregate(
+            total=Count('encounter_id'),
+            waiting=Count('encounter_id', filter=Q(workflow_state__in=[
+                Encounter.WorkflowState.REGISTERED, 
+                Encounter.WorkflowState.WAITING_CLINIC
+            ])),
+            in_progress=Count('encounter_id', filter=Q(workflow_state__in=[
+                Encounter.WorkflowState.IN_CLINIC,
+                Encounter.WorkflowState.WAITING_IMAGING,
+                Encounter.WorkflowState.IN_IMAGING,
+                Encounter.WorkflowState.WAITING_RESULTS,
+                Encounter.WorkflowState.WAITING_PAYMENT
+            ])),
+            completed=Count('encounter_id', filter=Q(workflow_state=Encounter.WorkflowState.COMPLETED))
+        )
+
+        results = []
+        for enc in queryset:
+            doctor_name = enc.assigned_doctor.name if enc.assigned_doctor else None
+            
+            results.append({
+                'encounter_id': enc.encounter_id,
+                'patient_name': enc.patient.name,
+                'patient_id': enc.patient.patient_id,
+                'gender': enc.patient.gender,
+                'age': enc.patient.age,
+                'doctor_name': doctor_name,
+                'workflow_state': enc.workflow_state,
+                'state_entered_at': enc.state_entered_at,
+                'start_time': enc.start_time,
+                'end_time': enc.end_time or enc.updated_at,
+                'updated_at': enc.updated_at,
+            })
+
+        return Response({
+            'stats': stats,
+            'encounters': results
+        }, status=status.HTTP_200_OK)
