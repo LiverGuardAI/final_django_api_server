@@ -2,7 +2,12 @@ import json
 import os
 from openai import OpenAI
 
-client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+
+def get_client():
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        return None
+    return OpenAI(api_key=api_key)
 
 SYSTEM = """
 You are a medical radiology report generator specialized in liver tumor analysis.

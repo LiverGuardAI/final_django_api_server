@@ -37,17 +37,28 @@ class DoctorDashboardView(APIView):
             workflow_state=Encounter.WorkflowState.IN_CLINIC
         ).count()
 
+        today = timezone.now().date()
+
         # 진료 후 처리 중인 환자 (수납 대기, 결과 대기, 촬영 대기/중)
-        # 최종 수납 완료(COMPLETED) 된 환자는 제외
         post_clinic_states = [
             Encounter.WorkflowState.WAITING_PAYMENT,
             Encounter.WorkflowState.WAITING_RESULTS,
             Encounter.WorkflowState.WAITING_IMAGING,
             Encounter.WorkflowState.IN_IMAGING,
         ]
-        completed_today = Encounter.objects.filter(
+        
+        # 1. 진료 후 처리 중인 환자 수
+        post_clinic_count = Encounter.objects.filter(
             workflow_state__in=post_clinic_states
         ).count()
+
+        # 2. 오늘 진료 완료(수납까지 완료)된 환자 수
+        completed_today_count = Encounter.objects.filter(
+            workflow_state=Encounter.WorkflowState.COMPLETED,
+            updated_at__date=today
+        ).count()
+
+        completed_today = post_clinic_count + completed_today_count
 
         return Response({
             'message': f'안녕하세요, {user.first_name} 의사님',
@@ -167,21 +178,19 @@ class QueueListView(APIView):
     def get(self, request):
         try:
             # 오늘 날짜
-
+            today = timezone.now().date()
 
             # 쿼리 파라미터로 상태 필터링 (기본값: WAITING_CLINIC)
             encounter_status = request.query_params.get('status', 'WAITING_CLINIC')
             doctor_id = request.query_params.get('doctor_id')
 
             # Encounter 조회
-            # 수납 완료(COMPLETED) 및 취소(CANCELLED)된 환자는 목록에서 제외 (사용자 요청)
-            exclude_states = [
-                Encounter.WorkflowState.COMPLETED,
-                Encounter.WorkflowState.CANCELLED,
-            ]
-            
+            # 취소(CANCELLED)된 환자는 항상 제외
+            # 수납 완료(COMPLETED)된 환자는 오늘 날짜인 경우만 포함 (오늘의 진료 내역 확인용)
             encounters = Encounter.objects.exclude(
-                workflow_state__in=exclude_states
+                workflow_state=Encounter.WorkflowState.CANCELLED
+            ).exclude(
+                Q(workflow_state=Encounter.WorkflowState.COMPLETED) & ~Q(updated_at__date=today)
             )
 
             # 의사별 필터링 (본인 담당 환자만)
@@ -190,7 +199,7 @@ class QueueListView(APIView):
 
             # 상태별 필터링
             if encounter_status == 'ALL':
-                # 모든 상태
+                # 모든 상태 (위에서 필터링된 범위 내)
                 pass
             else:
                 encounters = encounters.filter(workflow_state=encounter_status)
@@ -214,8 +223,10 @@ class QueueListView(APIView):
                 workflow_state=Encounter.WorkflowState.IN_CLINIC
             ).count()
 
+            # 오늘 진료 완료된 환자 수
             completed_count = base_qs.filter(
-                workflow_state=Encounter.WorkflowState.COMPLETED
+                workflow_state=Encounter.WorkflowState.COMPLETED,
+                updated_at__date=today
             ).count()
 
             return Response({
