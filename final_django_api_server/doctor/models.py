@@ -249,9 +249,27 @@ class Encounter(models.Model):
             # 새로운 상태가 촬영 중이라면 카운트 증가
             elif new_state == self.WorkflowState.IN_IMAGING:
                 cache_manager.increment_in_progress_count('imaging')
+                
+            # WebSocket 알림 전송 (대기열 목록 갱신용)
+            from channels.layers import get_channel_layer
+            from asgiref.sync import async_to_sync
+            
+            channel_layer = get_channel_layer()
+            async_to_sync(channel_layer.group_send)(
+                'clinic_dashboard',
+                {
+                    'type': 'update_queue',
+                    'message': 'Encounter status changed',
+                    'data': {
+                        'encounter_id': self.encounter_id,
+                        'old_state': old_state,
+                        'new_state': new_state
+                    }
+                }
+            )
 
         except Exception as e:
-            print(f"Redis cache update failed: {e}")
+            print(f"Redis/WebSocket update failed: {e}")
             # 캐시 업데이트 실패가 트랜잭션을 롤백시키면 안 됨 (로그만 남김)
 
         # 5. 원무과 알림 전송 (수납 대기 / 오더 대기)
