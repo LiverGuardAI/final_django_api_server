@@ -184,6 +184,10 @@ class QueueListView(APIView):
                 workflow_state__in=exclude_states
             )
 
+            # 의사별 필터링 (본인 담당 환자만)
+            if doctor_id:
+                encounters = encounters.filter(assigned_doctor_id=doctor_id)
+
             # 상태별 필터링
             if encounter_status == 'ALL':
                 # 모든 상태
@@ -198,8 +202,6 @@ class QueueListView(APIView):
             serializer = EncounterSerializer(encounters, many=True)
 
             # 통계 정보
-            # 통계 정보 (필터링 적용된 기준)
-            # 통계 정보 (필터링 적용된 기준) - 날짜 제한 없음
             base_qs = Encounter.objects.all()
             if doctor_id:
                 base_qs = base_qs.filter(assigned_doctor_id=doctor_id)
