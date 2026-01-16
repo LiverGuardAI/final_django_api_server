@@ -75,12 +75,18 @@ class AppointmentSerializer(serializers.ModelSerializer):
     patient_name = serializers.CharField(source='patient.name', read_only=True)
     doctor_name = serializers.CharField(source='doctor.name', read_only=True)
     appointment_time = serializers.SerializerMethodField()
+    has_encounter = serializers.SerializerMethodField()
 
     def get_appointment_time(self, obj):
         """시간을 HH:MM 형식으로 반환"""
         if obj.appointment_time:
             return obj.appointment_time.strftime('%H:%M')
         return None
+
+    def get_has_encounter(self, obj):
+        """해당 예약에 연결된 Encounter가 있는지 확인"""
+        from doctor.models import Encounter
+        return Encounter.objects.filter(appointment=obj).exists()
 
     class Meta:
         model = Appointment

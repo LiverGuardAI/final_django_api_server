@@ -30,4 +30,7 @@ urlpatterns = [
     # 문진표 관련 API
     path('questionnaire/', views.create_questionnaire, name='create-questionnaire'),
     path('questionnaire/get/', views.get_questionnaire, name='get-questionnaire'),
+
+    # 대기열 상태 조회 API
+    path('queue/status/', views.get_queue_status, name='get-queue-status'),
 ]

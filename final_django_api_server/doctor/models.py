@@ -213,6 +213,10 @@ class Encounter(models.Model):
             self.status = self.Status.COMPLETED
             if not self.end_time:
                 self.end_time = timezone.now()
+            # 연결된 Appointment 상태도 '진료완료'로 변경
+            if self.appointment:
+                self.appointment.status = '진료완료'
+                self.appointment.save()
         elif new_state == self.WorkflowState.CANCELLED:
             self.status = self.Status.CANCELLED
             if not self.end_time:

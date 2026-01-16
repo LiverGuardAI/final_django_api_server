@@ -1115,11 +1115,16 @@ def check_appointment_status(request):
         }, status=status.HTTP_200_OK)
 
     # 오늘 이후 예약 확인 (당일 + 사전예약 포함)
+    # 진료완료 상태는 제외 - 새로운 예약 가능하도록
     today = date.today()
     appointment = Appointment.objects.filter(
         patient=patient,
         appointment_date__gte=today,
-        status__in=['대기', '예약완료']
+        status__in=['대기', '예약완료']  # 진료완료, 취소, 마감 제외
+    ).exclude(
+        # 과거 날짜의 예약완료는 제외 (진료완료로 처리 안된 것)
+        appointment_date__lt=today,
+        status='예약완료'
     ).order_by('appointment_date', 'appointment_time').first()
 
     if appointment:
@@ -1381,7 +1386,7 @@ def create_questionnaire(request):
         }
     }
     """
-    from doctor.models import Appointment, Encounter, Questionnaire
+    from doctor.models import Appointment, Encounter, Questionnaire, Patient
     from .models import UserProfile
 
     profile_id = request.data.get('profile_id')
@@ -1403,13 +1408,19 @@ def create_questionnaire(request):
         }, status=status.HTTP_404_NOT_FOUND)
 
     # 2. 연동된 Patient 확인
-    if not user_profile.linked_patient:
+    if not user_profile.linked_patient_id:
         return Response({
             'success': False,
             'message': '병원 환자 정보와 연동되지 않았습니다.'
         }, status=status.HTTP_400_BAD_REQUEST)
 
-    patient = user_profile.linked_patient
+    try:
+        patient = Patient.objects.get(patient_id=user_profile.linked_patient_id)
+    except Patient.DoesNotExist:
+        return Response({
+            'success': False,
+            'message': '연동된 환자 정보를 찾을 수 없습니다.'
+        }, status=status.HTTP_404_NOT_FOUND)
 
     # 3. 오늘 이후 승인된 예약 확인 (예약완료 상태만, 당일 + 사전예약 포함)
     today = date.today()
@@ -1432,6 +1443,17 @@ def create_questionnaire(request):
         return Response({
             'success': False,
             'message': '진료 대기열에 등록되지 않았습니다. 원무과에 문의해주세요.'
+        }, status=status.HTTP_400_BAD_REQUEST)
+
+    # 4-1. 진료대기/진료중 상태 체크 - 문진표 저장 불가
+    blocked_states = ['WAITING_CLINIC', 'IN_CLINIC']
+    if encounter.workflow_state in blocked_states:
+        state_label = '진료대기' if encounter.workflow_state == 'WAITING_CLINIC' else '진료중'
+        return Response({
+            'success': False,
+            'blocked': True,
+            'message': f'현재 {state_label} 상태입니다. 문진표를 저장할 수 없습니다.',
+            'workflow_state': encounter.workflow_state,
         }, status=status.HTTP_400_BAD_REQUEST)
 
     # 5. 이미 문진표가 있는지 확인
@@ -1477,7 +1499,7 @@ def get_questionnaire(request):
 
     GET /api/patients/questionnaire/?profile_id=1
     """
-    from doctor.models import Appointment, Encounter, Questionnaire
+    from doctor.models import Appointment, Encounter, Questionnaire, Patient
     from .models import UserProfile
 
     profile_id = request.query_params.get('profile_id')
@@ -1498,13 +1520,19 @@ def get_questionnaire(request):
         }, status=status.HTTP_404_NOT_FOUND)
 
     # 2. 연동된 Patient 확인
-    if not user_profile.linked_patient:
+    if not user_profile.linked_patient_id:
         return Response({
             'success': False,
             'message': '병원 환자 정보와 연동되지 않았습니다.'
         }, status=status.HTTP_400_BAD_REQUEST)
 
-    patient = user_profile.linked_patient
+    try:
+        patient = Patient.objects.get(patient_id=user_profile.linked_patient_id)
+    except Patient.DoesNotExist:
+        return Response({
+            'success': False,
+            'message': '연동된 환자 정보를 찾을 수 없습니다.'
+        }, status=status.HTTP_404_NOT_FOUND)
 
     # 3. 오늘 이후 승인된 예약 확인 (당일 + 사전예약 포함)
     today = date.today()
@@ -1529,6 +1557,19 @@ def get_questionnaire(request):
             'success': False,
             'has_questionnaire': False,
             'message': '진료 대기열에 등록되지 않았습니다.'
+        }, status=status.HTTP_200_OK)
+
+    # 4-1. 진료대기/진료중 상태 체크 - 문진표 수정 불가
+    blocked_states = ['WAITING_CLINIC', 'IN_CLINIC']
+    if encounter.workflow_state in blocked_states:
+        questionnaire = Questionnaire.objects.filter(encounter=encounter).first()
+        state_label = '진료대기' if encounter.workflow_state == 'WAITING_CLINIC' else '진료중'
+        return Response({
+            'success': False,
+            'blocked': True,
+            'has_questionnaire': questionnaire is not None,
+            'message': f'현재 {state_label} 상태입니다. 문진표를 수정할 수 없습니다.',
+            'workflow_state': encounter.workflow_state,
         }, status=status.HTTP_200_OK)
 
     # 5. 문진표 조회
@@ -1579,3 +1620,126 @@ def _send_questionnaire_update(encounter, patient, action):
             )
     except Exception as e:
         print(f"WebSocket 문진표 알림 전송 실패: {e}")
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def get_queue_status(request):
+    """
+    환자의 진료 대기열 상태 조회 API (환자 앱용)
+
+    GET /api/patients/queue/status/?profile_id=1
+
+    Returns:
+        - in_queue: 대기열에 있는지 여부
+        - queue_position: 나의 대기 순서 (진료중인 사람 + 앞의 대기 인원)
+        - waiting_count: 내 앞 대기 인원 (자신 제외)
+        - in_progress_count: 현재 진료중인 인원
+        - doctor_name: 담당 의사 이름
+        - room_number: 진료실 번호
+        - estimated_wait_minutes: 예상 대기 시간 (분)
+        - workflow_state: 현재 상태 (WAITING_CLINIC, IN_CLINIC 등)
+    """
+    from doctor.models import Appointment, Encounter, Patient, Doctor
+    from .models import UserProfile
+
+    profile_id = request.query_params.get('profile_id')
+
+    if not profile_id:
+        return Response({
+            'success': False,
+            'message': 'profile_id가 필요합니다.'
+        }, status=status.HTTP_400_BAD_REQUEST)
+
+    # 1. UserProfile 조회
+    try:
+        user_profile = UserProfile.objects.get(profile_id=profile_id)
+    except UserProfile.DoesNotExist:
+        return Response({
+            'success': False,
+            'message': '사용자를 찾을 수 없습니다.'
+        }, status=status.HTTP_404_NOT_FOUND)
+
+    # 2. 연동된 Patient 확인
+    if not user_profile.linked_patient_id:
+        return Response({
+            'success': False,
+            'in_queue': False,
+            'message': '병원 환자 정보와 연동되지 않았습니다.'
+        }, status=status.HTTP_200_OK)
+
+    try:
+        patient = Patient.objects.get(patient_id=user_profile.linked_patient_id)
+    except Patient.DoesNotExist:
+        return Response({
+            'success': False,
+            'in_queue': False,
+            'message': '연동된 환자 정보를 찾을 수 없습니다.'
+        }, status=status.HTTP_200_OK)
+
+    # 3. 현재 활성 Encounter 조회 (진료대기 또는 진료중)
+    active_states = ['WAITING_CLINIC', 'IN_CLINIC']
+    my_encounter = Encounter.objects.filter(
+        patient=patient,
+        workflow_state__in=active_states
+    ).order_by('-created_at').first()
+
+    if not my_encounter:
+        return Response({
+            'success': True,
+            'in_queue': False,
+            'message': '현재 진료 대기 상태가 아닙니다.'
+        }, status=status.HTTP_200_OK)
+
+    # 4. 담당 의사 정보
+    doctor = my_encounter.assigned_doctor
+    doctor_name = doctor.name if doctor else '미배정'
+    room_number = doctor.room_number if doctor else '미정'
+
+    # 5. 같은 의사의 대기열 조회
+    if doctor:
+        # 진료중인 환자 수
+        in_progress_count = Encounter.objects.filter(
+            assigned_doctor=doctor,
+            workflow_state='IN_CLINIC'
+        ).count()
+
+        # 대기중인 환자 수 (자신 포함)
+        total_waiting_count = Encounter.objects.filter(
+            assigned_doctor=doctor,
+            workflow_state='WAITING_CLINIC'
+        ).count()
+
+        # 내 앞에 대기중인 환자 수 (나보다 먼저 대기열에 들어온 환자)
+        waiting_before_me = Encounter.objects.filter(
+            assigned_doctor=doctor,
+            workflow_state='WAITING_CLINIC',
+            created_at__lt=my_encounter.created_at
+        ).count()
+
+        # 내가 진료중이면
+        if my_encounter.workflow_state == 'IN_CLINIC':
+            queue_position = 1  # 진료중이면 1번
+        else:
+            # 대기중이면: 진료중 + 내 앞 대기자 + 나 자신(1)
+            queue_position = in_progress_count + waiting_before_me + 1
+    else:
+        in_progress_count = 0
+        total_waiting_count = 1  # 자신만
+        queue_position = 1  # 의사 미배정이어도 자신은 1번
+
+    # 예상 대기 시간 (인당 5분, 자신 포함)
+    estimated_wait_minutes = queue_position * 5
+
+    return Response({
+        'success': True,
+        'in_queue': True,
+        'queue_position': queue_position,
+        'waiting_count': total_waiting_count,
+        'in_progress_count': in_progress_count,
+        'doctor_name': doctor_name,
+        'room_number': room_number or '미정',
+        'estimated_wait_minutes': estimated_wait_minutes,
+        'workflow_state': my_encounter.workflow_state,
+        'workflow_state_display': my_encounter.get_workflow_state_display(),
+    }, status=status.HTTP_200_OK)

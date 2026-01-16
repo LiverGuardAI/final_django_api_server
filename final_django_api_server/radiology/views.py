@@ -359,7 +359,6 @@ def get_radiologist_list(request):
         'success': True,
         'results': radiologist_list
     }, status=status.HTTP_200_OK)
-<<<<<<< Updated upstream
 
 
 class ImagingStatsView(APIView):
@@ -437,5 +436,3 @@ class ImagingStatsView(APIView):
                 },
             }
         }, status=status.HTTP_200_OK)
-=======
->>>>>>> Stashed changes
