@@ -8,6 +8,7 @@ from .views import (
     ImagingStatsView,
     TumorAnalysisView,
     CTReportCreateView,
+    get_radiologist_list,
 )
 
 urlpatterns = [
@@ -19,4 +20,5 @@ urlpatterns = [
     path('stats/', ImagingStatsView.as_view(), name='imaging_stats'),
     path('tumor-analysis/', TumorAnalysisView.as_view(), name='tumor_analysis'),
     path('ct-reports/', CTReportCreateView.as_view(), name='ct_report_create'),
+    path('list/', get_radiologist_list, name='radiologist_list'),
 ]

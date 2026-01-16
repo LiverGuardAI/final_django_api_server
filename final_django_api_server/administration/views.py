@@ -1100,7 +1100,81 @@ class ConfirmOrderView(APIView):
             return Response({'message': '오더가 처리되었습니다.'}, status=status.HTTP_200_OK)
 
         except (LabOrder.DoesNotExist, DoctorToRadiologyOrder.DoesNotExist):
-             return Response({'error': '오더를 찾을 수 없습니다.'}, status=status.HTTP_404_NOT_FOUND)
+            return Response({'error': '오더를 찾을 수 없습니다.'}, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class AssignImagingDoctorView(APIView):
+    """
+    Imaging order assignment API (admin).
+    - validates radiologist id
+    - moves order to WAITING
+    - updates encounter workflow state when all orders are accepted
+    """
+    permission_classes = [IsAuthenticated]
+
+    def patch(self, request, order_id):
+        try:
+            order_type = request.data.get('order_type')
+            radiologist_id = request.data.get('doctor_id')
+
+            if order_type != 'IMAGING':
+                return Response({'error': 'Invalid order type'}, status=status.HTTP_400_BAD_REQUEST)
+            if not radiologist_id:
+                return Response({'error': 'doctor_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+            from doctor.models import LabOrder, DoctorToRadiologyOrder, Encounter
+            from radiology.models import Radiology
+
+            radiologist = Radiology.objects.filter(radiologic_id=radiologist_id).first()
+            if not radiologist:
+                return Response({'error': 'Radiologist not found'}, status=status.HTTP_404_NOT_FOUND)
+
+            order = DoctorToRadiologyOrder.objects.get(order_id=order_id)
+            order.status = 'WAITING'
+            order.save()
+
+            encounter = order.encounter
+            if not encounter or encounter.workflow_state == Encounter.WorkflowState.COMPLETED:
+                return Response({'message': 'Order assigned'}, status=status.HTTP_200_OK)
+
+            has_pending_lab = LabOrder.objects.filter(
+                encounter=encounter,
+                status='REQUESTED'
+            ).exists()
+            has_pending_imaging = DoctorToRadiologyOrder.objects.filter(
+                encounter=encounter,
+                status='REQUESTED'
+            ).exists()
+
+            if has_pending_lab or has_pending_imaging:
+                return Response({'message': 'Order assigned'}, status=status.HTTP_200_OK)
+
+            has_imaging_orders = DoctorToRadiologyOrder.objects.filter(
+                encounter=encounter,
+                status__in=['WAITING', 'IN_PROGRESS']
+            ).exists()
+
+            if has_imaging_orders:
+                encounter.transition_to(Encounter.WorkflowState.WAITING_IMAGING)
+                send_queue_update_websocket(
+                    message=f"Imaging waiting {encounter.patient.name}",
+                    extra_data={
+                        "queue_type": "imaging",
+                        "imaging_waiting": cache_manager.get_waiting_count('imaging'),
+                        "imaging_in_progress": cache_manager.get_in_progress_count('imaging'),
+                    }
+                )
+                cache_manager.redis_client.delete('waiting_queue_list:imaging')
+            else:
+                encounter.transition_to(Encounter.WorkflowState.WAITING_RESULTS)
+                cache_manager.redis_client.delete('waiting_queue_list:clinic')
+
+            return Response({'message': 'Order assigned'}, status=status.HTTP_200_OK)
+
+        except DoctorToRadiologyOrder.DoesNotExist:
+            return Response({'error': 'Order not found'}, status=status.HTTP_404_NOT_FOUND)
         except Exception as e:
             return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
@@ -1123,7 +1197,15 @@ class CompleteVitalOrPhysicalView(APIView):
             encounter = order.encounter
             patient = order.patient
 
+            # [FIX] 유효성 검사 (권한 및 의사 배정 확인)
+            if not hasattr(request.user, 'administration'):
+                return Response({'error': '원무과 직원 계정으로만 처리가 가능합니다.'}, status=status.HTTP_403_FORBIDDEN)
+            
+            if not encounter.assigned_doctor:
+                return Response({'error': '담당 의사가 배정되지 않은 환자입니다. 의사를 배정해주세요.'}, status=status.HTTP_400_BAD_REQUEST)
+
             # MedicalRecord 생성 또는 가져오기
+            # staff 필드는 NOT NULL이므로 반드시 request.user.administration을 할당해야 함
             medical_record, created = MedicalRecord.objects.get_or_create(
                 encounter=encounter,
                 patient=patient,
@@ -1131,7 +1213,7 @@ class CompleteVitalOrPhysicalView(APIView):
                     'record_date': timezone.now().date(),
                     'record_time': timezone.now().time(),
                     'doctor': encounter.assigned_doctor,
-                    'staff': request.user.administration if hasattr(request.user, 'administration') else None,
+                    'staff': request.user.administration,
                     'record_status': MedicalRecord.RecordStatus.DRAFT,
                 }
             )
@@ -1144,6 +1226,8 @@ class CompleteVitalOrPhysicalView(APIView):
                     measured_at=timezone.now().date(),
                     sbp=lab_data.get('systolic_bp'),
                     dbp=lab_data.get('diastolic_bp'),
+                    heart_rate=lab_data.get('heart_rate'),        # Added
+                    temperature=lab_data.get('body_temperature'), # Added
                 )
             
             elif order_type == 'PHYSICAL':
@@ -1157,7 +1241,6 @@ class CompleteVitalOrPhysicalView(APIView):
                     bmi=lab_data.get('bmi'),
                 )
 
-            # 오더 상태를 완료로 변경
             order.status = LabOrder.OrderStatus.COMPLETED
             order.save()
 

@@ -15,6 +15,7 @@ from .views import (
     PendingOrdersView,
     InProgressOrdersView,
     ConfirmOrderView,
+    AssignImagingDoctorView,
     CompleteVitalOrPhysicalView,
     CancelEncounterView,
     DailyPatientStatusView,
@@ -51,6 +52,7 @@ urlpatterns = [
     path('orders/pending/', PendingOrdersView.as_view(), name='pending_orders'),
     path('orders/in-progress/', InProgressOrdersView.as_view(), name='in_progress_orders'),
     path('orders/<int:order_id>/confirm/', ConfirmOrderView.as_view(), name='confirm_order'),
+    path('orders/<int:order_id>/assign-doctor/', AssignImagingDoctorView.as_view(), name='assign_imaging_doctor'),
     path('orders/<int:order_id>/complete-vital/', CompleteVitalOrPhysicalView.as_view(), name='complete_vital'),
     path('encounters/<int:encounter_id>/cancel/', CancelEncounterView.as_view(), name='cancel_encounter'),
 ]
