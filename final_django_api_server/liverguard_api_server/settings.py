@@ -40,6 +40,7 @@ INSTALLED_APPS = [
     'patients',
     'ai_model_server',
     'orthanc_server',
+    'cdss_channels_redis',  # 채팅 기능
     'rest_framework',
     'rest_framework_simplejwt',
     'corsheaders',
@@ -107,9 +108,14 @@ CHANNEL_LAYERS = {
         "BACKEND": "channels_redis.core.RedisChannelLayer",
         "CONFIG": {
             "hosts": [(REDIS_HOST, REDIS_PORT)],
+            "capacity": 1500,  # 채널당 최대 메시지 수
+            "expiry": 10,  # 메시지 만료 시간(초)
         },
     },
 }
+
+# Daphne/ASGI 설정
+ASGI_THREADS = 4  # ASGI 워커 스레드 수
 
 # ------------------------------------------------------------------------------
 # RabbitMQ Configuration (진료 대기열 관리)

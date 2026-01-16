@@ -30,6 +30,7 @@ urlpatterns = [
     path('api/orthanc/', include('orthanc_server.urls')),  # Orthanc 프록시 API
     path('api/kakaomap/', include('kakaomap.urls')),  # Kakao Map API
     path('api/patients/', include('patients.urls')),  # Patients (앱) API
+    path('api/chat/', include('cdss_channels_redis.urls')),  # 채팅 API
 ]
 
 # Static files serving (for development and production)
