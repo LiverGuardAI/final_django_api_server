@@ -5,11 +5,13 @@ from .views import (
     PatientLabResultsView, PatientDoctorToRadiologyOrdersView, PatientHCCDiagnosisView,
     DoctorInfoView, DoctorMedicalRecordListView, CreateLabOrderView, CreateDoctorToRadiologyOrderView,
     PatientCTSeriesView, PatientGenomicDataView, PatientLabOrdersView, PatientProfileView,
-    AnnouncementListView, AnnouncementDetailView, ScheduleDoctorListView, ScheduleDoctorDetailView
+    AnnouncementListView, AnnouncementDetailView, ScheduleDoctorListView, ScheduleDoctorDetailView,
+    PatientQuestionnaireHistoryView, PatientVitalHistoryView, MedicalRecordSaveView
 )
 
 urlpatterns = [
     path('medical-records/', DoctorMedicalRecordListView.as_view(), name='doctor_medical_records'),
+    path('medical-records/save/', MedicalRecordSaveView.as_view(), name='medical_record_save'),
     path('me/', DoctorInfoView.as_view(), name='doctor_info'),
     path('dashboard/', DoctorDashboardView.as_view(), name='doctor_dashboard'),
     path('patients/', PatientListView.as_view(), name='doctor_patients'),
@@ -17,6 +19,8 @@ urlpatterns = [
     path('encounter/<int:encounter_id>/status/', UpdateEncounterStatusView.as_view(), name='update_encounter_status'),
     path('encounter/<int:encounter_id>/', EncounterDetailView.as_view(), name='encounter_detail'),
     path('patient/<str:patient_id>/encounters/', PatientEncounterHistoryView.as_view(), name='patient_encounter_history'),
+    path('patient/<str:patient_id>/questionnaires/', PatientQuestionnaireHistoryView.as_view(), name='patient_questionnaire_history'),
+    path('patient/<str:patient_id>/vitals/', PatientVitalHistoryView.as_view(), name='patient_vital_history'),
     path('patient/<str:patient_id>/lab-results/', PatientLabResultsView.as_view(), name='patient_lab_results'),
     path('patient/<str:patient_id>/profile/', PatientProfileView.as_view(), name='patient_profile'),
     path('patient/<str:patient_id>/lab-orders/', PatientLabOrdersView.as_view(), name='patient_lab_orders'),
