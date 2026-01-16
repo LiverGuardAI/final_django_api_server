@@ -7,6 +7,7 @@ from .views import (
     EndFilmingView,
     ImagingStatsView,
     TumorAnalysisView,
+    CTReportCreateView,
 )
 
 urlpatterns = [
@@ -17,4 +18,5 @@ urlpatterns = [
     path('waitlist/end-filming/', EndFilmingView.as_view(), name='end_filming'),
     path('stats/', ImagingStatsView.as_view(), name='imaging_stats'),
     path('tumor-analysis/', TumorAnalysisView.as_view(), name='tumor_analysis'),
+    path('ct-reports/', CTReportCreateView.as_view(), name='ct_report_create'),
 ]
