@@ -7,7 +7,12 @@ from django.db.models import Q
 from django.utils import timezone
 from accounts.permissions import IsRadiologist, IsDoctorOrRadiologist
 from doctor.models import Patient, Encounter
-from .serializers import PatientWaitlistSerializer, RadiologyQueueSerializer, EncounterWaitlistSerializer
+from .serializers import (
+    PatientWaitlistSerializer,
+    RadiologyQueueSerializer,
+    EncounterWaitlistSerializer,
+    CTReportSerializer,
+)
 import io
 import math
 import os
@@ -1041,3 +1046,37 @@ class TumorAnalysisView(APIView):
         }
 
         return Response(_convert_numpy_types(response_data), status=status.HTTP_200_OK)
+
+
+class CTReportCreateView(APIView):
+    """CT 보고서 저장 API"""
+    permission_classes = [IsDoctorOrRadiologist]
+
+    def post(self, request):
+        series_instance_uid = (
+            request.data.get('series_instance_uid')
+            or request.data.get('seriesInstanceUID')
+            or request.data.get('seriesinstanceuid')
+        )
+        report_text = request.data.get('report_text') or request.data.get('report')
+
+        if not series_instance_uid:
+            return Response(
+                {'error': 'series_instance_uid is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        if not report_text:
+            return Response(
+                {'error': 'report_text is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        serializer = CTReportSerializer(data={
+            'series_instance_uid': series_instance_uid,
+            'report_text': report_text,
+        })
+        if serializer.is_valid():
+            report = serializer.save()
+            return Response(CTReportSerializer(report).data, status=status.HTTP_201_CREATED)
+
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
