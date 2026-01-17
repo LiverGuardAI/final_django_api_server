@@ -1,5 +1,5 @@
 from django.urls import path
-from .views import CreateSegmentationMaskView, ReportGenerateView, LMStudioReportGenerateView, SegmentationTaskStatusView, CreateFeatureExtractionView, FeatureExtractionTaskStatusView
+from .views import CreateSegmentationMaskView, ReportGenerateView, LMStudioReportGenerateView, SegmentationTaskStatusView, CreateFeatureExtractionView, FeatureExtractionTaskStatusView, ClinicalNoteGenerateView
 
 from .views import BentoMLHealthView, PredictStageView, PredictRelapseView, PredictSurvivalView, PredictAllView, PredictionTaskStatusView, search_drugs, DDIAnalysisView
 
@@ -24,5 +24,6 @@ urlpatterns = [
     
     # open api view
     path('openapi/ct-report/generate/', ReportGenerateView.as_view(), name='ct_report_generate'),
+    path('openapi/clinical-note/generate/', ClinicalNoteGenerateView.as_view(), name='clinical_note_generate'),
     path('lmstudio/ct-report/generate/', LMStudioReportGenerateView.as_view(), name='lmstudio_ct_report_generate'),
 ]

@@ -39,3 +39,34 @@ JSON:
 """
     )
     return resp.output_text
+
+CLINICAL_NOTE_SYSTEM = """
+You are a medical assistant that drafts clinical notes for a patient encounter.
+
+Rules:
+- Use only the provided data.
+- Do not invent findings.
+- If information is missing, say "\uC815\uBCF4 \uC5C6\uC74C".
+- Output in Korean.
+- Output plain text without markdown.
+"""
+
+
+def generate_clinical_note_suggestion(payload: dict) -> str:
+    client = get_client()
+    if client is None:
+        raise ValueError("OPENAI_API_KEY is not set")
+
+    content = json.dumps(payload, ensure_ascii=False, indent=2)
+    response = client.responses.create(
+        model=os.environ.get("OPENAI_MODEL", "gpt-4.1-mini"),
+        temperature=0.2,
+        instructions=CLINICAL_NOTE_SYSTEM,
+        input=(
+            "Draft a concise clinical note in Korean based on the JSON below. "
+            "Focus on the current visit and do not add any extra assumptions.\n\n"
+            f"JSON:\n{content}"
+        ),
+    )
+    return response.output_text.strip()
+

@@ -6,7 +6,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import AllowAny, IsAuthenticated
-from services.report_llm import generate_tumor_analysis_report
+from services.report_llm import generate_tumor_analysis_report, generate_clinical_note_suggestion
 from services.report_lmstudio import generate_lmstudio_report
 
 # 기존 팀원분이 만든 Celery Task 임포트
@@ -557,3 +557,17 @@ class LMStudioReportGenerateView(APIView):
             )
         except Exception as exc:
             return Response({"error": f"서버 내부 오류: {str(exc)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+class ClinicalNoteGenerateView(APIView):
+    def post(self, request):
+        payload = request.data if isinstance(request.data, dict) else {}
+        if not payload:
+            return Response({"error": "payload is required"}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            suggestion = generate_clinical_note_suggestion(payload)
+            return Response({"suggestion": suggestion})
+        except ValueError as exc:
+            return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as exc:
+            return Response({"error": f"Server error: {str(exc)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
