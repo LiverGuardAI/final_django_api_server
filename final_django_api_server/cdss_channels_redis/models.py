@@ -129,8 +129,8 @@ class ConversationMember(models.Model):
         return f"{self.user} in {self.conversation}"
 
     def get_unread_count(self):
-        """안 읽은 메시지 수"""
-        queryset = Message.objects.filter(conversation=self.conversation)
+        """안 읽은 메시지 수 (자신이 보낸 메시지 제외)"""
+        queryset = Message.objects.filter(conversation=self.conversation).exclude(sender=self.user)
         if self.last_read_message:
             queryset = queryset.filter(message_id__gt=self.last_read_message.message_id)
         return queryset.count()

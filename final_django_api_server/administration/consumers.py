@@ -1,4 +1,5 @@
 import json
+import asyncio
 from channels.generic.websocket import AsyncWebsocketConsumer
 from urllib.parse import parse_qs
 from channels.db import database_sync_to_async
@@ -44,21 +45,49 @@ class ClinicConsumer(AsyncWebsocketConsumer):
         except Exception as e:
             print(f"ERROR in WebSocket connect: {e}")
             traceback.print_exc()
-            await self.close()
+            await self.close(code=4000)  # Custom code for server error
 
     async def disconnect(self, close_code):
-        # Leave general group
-        await self.channel_layer.group_discard(
-            self.group_name,
-            self.channel_name
-        )
-        # Leave user group
+        print(f"ClinicConsumer: Disconnecting, code: {close_code}")
+
+        # Fire-and-forget: 그룹 정리를 백그라운드로 실행하고 즉시 반환
+        # Redis expiry=10초가 백업으로 자동 정리함
+        group_name = getattr(self, 'group_name', None)
         user = self.scope.get('user')
-        if user and user.is_authenticated:
-            await self.channel_layer.group_discard(
-                f"user_{user.user_id}",
-                self.channel_name
-            )
+        channel_name = self.channel_name
+        channel_layer = self.channel_layer
+
+        async def cleanup_groups():
+            tasks = []
+            if group_name:
+                tasks.append(channel_layer.group_discard(group_name, channel_name))
+            if user and user.is_authenticated:
+                tasks.append(channel_layer.group_discard(f"user_{user.user_id}", channel_name))
+
+            if tasks:
+                try:
+                    await asyncio.gather(*tasks, return_exceptions=True)
+                except Exception as e:
+                    print(f"ClinicConsumer: Error in background cleanup: {e}")
+
+        # 백그라운드 태스크로 실행 (disconnect는 즉시 반환)
+        asyncio.create_task(cleanup_groups())
+
+        print(f"ClinicConsumer: Disconnect complete")
+
+    async def receive(self, text_data):
+        """클라이언트로부터 메시지 수신 (ping/pong 등)"""
+        try:
+            data = json.loads(text_data)
+            msg_type = data.get('type')
+
+            if msg_type == 'ping':
+                # Heartbeat ping 응답
+                await self.send(text_data=json.dumps({'type': 'pong'}))
+        except json.JSONDecodeError:
+            pass
+        except Exception as e:
+            print(f"ClinicConsumer receive error: {e}")
 
     async def update_queue(self, event):
         message = event.get('message', '')

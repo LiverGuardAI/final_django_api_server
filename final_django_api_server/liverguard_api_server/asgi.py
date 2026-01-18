@@ -16,6 +16,7 @@ from channels.db import database_sync_to_async
 from channels.routing import ProtocolTypeRouter, URLRouter
 from channels.auth import AuthMiddlewareStack
 import administration.routing  # 라우팅 파일 import
+import cdss_channels_redis.routing  # 채팅 라우팅
 
 @database_sync_to_async
 def get_user(user_id):
@@ -47,10 +48,14 @@ class JwtAuthMiddleware:
                 user_id = validated_token['user_id']
                 if user_id:
                     scope['user'] = await get_user(user_id)
-        except (InvalidToken, TokenError, Exception) as e:
-            # 인증 실패 시 기존 AuthMiddlewareStack의 결과(AnonymousUser 등)를 따름
-            # print(f"WebSocket JWT Auth Failed: {e}") 
-            pass
+        except (InvalidToken, TokenError) as e:
+            # JWT 토큰 인증 실패 - 토큰 만료 또는 유효하지 않음
+            print(f"WebSocket JWT Auth Failed: {e}, token exists: {token is not None}")
+            scope['user'] = AnonymousUser()
+        except Exception as e:
+            # 기타 예외 (DB 조회 실패 등)
+            print(f"WebSocket Auth Error: {e}, token exists: {token is not None}")
+            scope['user'] = AnonymousUser()
 
         return await self.inner(scope, receive, send)
 
@@ -62,7 +67,8 @@ application = ProtocolTypeRouter({
     "websocket": AuthMiddlewareStack(
         JwtAuthMiddleware(
             URLRouter(
-                administration.routing.websocket_urlpatterns
+                administration.routing.websocket_urlpatterns +
+                cdss_channels_redis.routing.websocket_urlpatterns
             )
         )
     ),
