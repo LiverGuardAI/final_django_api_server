@@ -15,14 +15,17 @@ from .views import (
     PendingOrdersView,
     InProgressOrdersView,
     ConfirmOrderView,
+    AssignImagingDoctorView,
     CompleteVitalOrPhysicalView,
     CancelEncounterView,
+    DailyPatientStatusView,
 )
 
 urlpatterns = [
     # 대시보드
     path('dashboard/', AdministrationDashboardView.as_view(), name='administration_dashboard'),
     path('dashboard/stats/', DashboardStatsView.as_view(), name='dashboard_stats'),
+    path('dashboard/patient-status/', DailyPatientStatusView.as_view(), name='patient_status_stats'),
 
     # 환자 관리
     path('patients/', PatientListView.as_view(), name='patient_list'),
@@ -49,6 +52,7 @@ urlpatterns = [
     path('orders/pending/', PendingOrdersView.as_view(), name='pending_orders'),
     path('orders/in-progress/', InProgressOrdersView.as_view(), name='in_progress_orders'),
     path('orders/<int:order_id>/confirm/', ConfirmOrderView.as_view(), name='confirm_order'),
+    path('orders/<int:order_id>/assign-doctor/', AssignImagingDoctorView.as_view(), name='assign_imaging_doctor'),
     path('orders/<int:order_id>/complete-vital/', CompleteVitalOrPhysicalView.as_view(), name='complete_vital'),
     path('encounters/<int:encounter_id>/cancel/', CancelEncounterView.as_view(), name='cancel_encounter'),
 ]

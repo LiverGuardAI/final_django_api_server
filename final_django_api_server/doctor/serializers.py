@@ -33,6 +33,8 @@ class EncounterSerializer(serializers.ModelSerializer):
     workflow_state_display = serializers.CharField(source='get_workflow_state_display', read_only=True)
     patient_name = serializers.CharField(source='patient.name', read_only=True)
     questionnaire = QuestionnaireSerializer(read_only=True)  # 문진표 데이터 포함
+    questionnaire_status = serializers.CharField(source='questionnaire.status', read_only=True, allow_null=True)
+    questionnaire_data = serializers.JSONField(source='questionnaire.data', read_only=True, allow_null=True)
 
     class Meta:
         model = Encounter

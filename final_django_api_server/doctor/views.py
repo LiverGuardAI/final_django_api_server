@@ -3,15 +3,17 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from accounts.permissions import IsDoctor
-from .models import Encounter, MedicalRecord, Patient, Doctor, LabResult, DoctorToRadiologyOrder, HCCDiagnosis, GenomicData, LabOrder, AnthropometricData, Announcement, ScheduleDoctor
+from .models import Encounter, MedicalRecord, Patient, Doctor, LabResult, DoctorToRadiologyOrder, HCCDiagnosis, GenomicData, LabOrder, AnthropometricData, Announcement, ScheduleDoctor, Questionnaire, VitalData
 from radiology.models import DICOMStudy, DICOMSeries
 from .serializers import (
     EncounterSerializer, MedicalRecordSerializer, UpdateEncounterStatusSerializer, DoctorListSerializer,
     MedicalRecordDetailSerializer, LabResultSerializer, DoctorToRadiologyOrderSerializer,
     HCCDiagnosisSerializer, GenomicDataSerializer, CreateLabOrderSerializer,
-    CreateDoctorToRadiologyOrderSerializer, LabOrderSerializer, AnnouncementSerializer, ScheduleDoctorSerializer
+    CreateDoctorToRadiologyOrderSerializer, LabOrderSerializer, AnnouncementSerializer, ScheduleDoctorSerializer,
+    QuestionnaireSerializer, VitalDataSerializer
 )
 from administration.serializers import PatientSerializer
+from administration.models import Administration
 from datetime import date, datetime
 from django.utils import timezone
 from django.db.models import Q, F
@@ -37,17 +39,28 @@ class DoctorDashboardView(APIView):
             workflow_state=Encounter.WorkflowState.IN_CLINIC
         ).count()
 
+        today = timezone.now().date()
+
         # 진료 후 처리 중인 환자 (수납 대기, 결과 대기, 촬영 대기/중)
-        # 최종 수납 완료(COMPLETED) 된 환자는 제외
         post_clinic_states = [
             Encounter.WorkflowState.WAITING_PAYMENT,
             Encounter.WorkflowState.WAITING_RESULTS,
             Encounter.WorkflowState.WAITING_IMAGING,
             Encounter.WorkflowState.IN_IMAGING,
         ]
-        completed_today = Encounter.objects.filter(
+        
+        # 1. 진료 후 처리 중인 환자 수
+        post_clinic_count = Encounter.objects.filter(
             workflow_state__in=post_clinic_states
         ).count()
+
+        # 2. 오늘 진료 완료(수납까지 완료)된 환자 수
+        completed_today_count = Encounter.objects.filter(
+            workflow_state=Encounter.WorkflowState.COMPLETED,
+            updated_at__date=today
+        ).count()
+
+        completed_today = post_clinic_count + completed_today_count
 
         return Response({
             'message': f'안녕하세요, {user.first_name} 의사님',
@@ -167,26 +180,28 @@ class QueueListView(APIView):
     def get(self, request):
         try:
             # 오늘 날짜
-
+            today = timezone.now().date()
 
             # 쿼리 파라미터로 상태 필터링 (기본값: WAITING_CLINIC)
             encounter_status = request.query_params.get('status', 'WAITING_CLINIC')
             doctor_id = request.query_params.get('doctor_id')
 
             # Encounter 조회
-            # 수납 완료(COMPLETED) 및 취소(CANCELLED)된 환자는 목록에서 제외 (사용자 요청)
-            exclude_states = [
-                Encounter.WorkflowState.COMPLETED,
-                Encounter.WorkflowState.CANCELLED,
-            ]
-            
+            # 취소(CANCELLED)된 환자는 항상 제외
+            # 수납 완료(COMPLETED)된 환자는 오늘 날짜인 경우만 포함 (오늘의 진료 내역 확인용)
             encounters = Encounter.objects.exclude(
-                workflow_state__in=exclude_states
+                workflow_state=Encounter.WorkflowState.CANCELLED
+            ).exclude(
+                Q(workflow_state=Encounter.WorkflowState.COMPLETED) & ~Q(updated_at__date=today)
             )
+
+            # 의사별 필터링 (본인 담당 환자만)
+            if doctor_id:
+                encounters = encounters.filter(assigned_doctor_id=doctor_id)
 
             # 상태별 필터링
             if encounter_status == 'ALL':
-                # 모든 상태
+                # 모든 상태 (위에서 필터링된 범위 내)
                 pass
             else:
                 encounters = encounters.filter(workflow_state=encounter_status)
@@ -198,8 +213,6 @@ class QueueListView(APIView):
             serializer = EncounterSerializer(encounters, many=True)
 
             # 통계 정보
-            # 통계 정보 (필터링 적용된 기준)
-            # 통계 정보 (필터링 적용된 기준) - 날짜 제한 없음
             base_qs = Encounter.objects.all()
             if doctor_id:
                 base_qs = base_qs.filter(assigned_doctor_id=doctor_id)
@@ -212,8 +225,10 @@ class QueueListView(APIView):
                 workflow_state=Encounter.WorkflowState.IN_CLINIC
             ).count()
 
+            # 오늘 진료 완료된 환자 수
             completed_count = base_qs.filter(
-                workflow_state=Encounter.WorkflowState.COMPLETED
+                workflow_state=Encounter.WorkflowState.COMPLETED,
+                updated_at__date=today
             ).count()
 
             return Response({
@@ -380,6 +395,85 @@ class EncounterDetailView(APIView):
             return Response({'error': str(e)}, status=500)
 
 
+class MedicalRecordSaveView(APIView):
+    """진료 기록 임시 저장 API"""
+    permission_classes = [IsDoctor]
+
+    def post(self, request):
+        try:
+            doctor = Doctor.objects.get(user=request.user)
+
+            encounter_id = request.data.get('encounter_id')
+            patient_id = request.data.get('patient_id')
+            if not encounter_id or not patient_id:
+                return Response({'error': 'encounter_id와 patient_id가 필요합니다.'}, status=status.HTTP_400_BAD_REQUEST)
+
+            encounter = Encounter.objects.select_related('patient').get(encounter_id=encounter_id)
+            if str(encounter.patient_id) != str(patient_id):
+                return Response({'error': '환자 정보가 일치하지 않습니다.'}, status=status.HTTP_400_BAD_REQUEST)
+
+            staff = getattr(request.user, 'administration', None)
+            if not staff:
+                staff = Administration.objects.order_by('staff_id').first()
+            if not staff:
+                return Response({'error': '원무과 직원 정보를 찾을 수 없습니다.'}, status=status.HTTP_400_BAD_REQUEST)
+
+            medical_record, created = MedicalRecord.objects.get_or_create(
+                encounter=encounter,
+                patient=encounter.patient,
+                defaults={
+                    'record_date': timezone.now().date(),
+                    'record_time': timezone.now().time(),
+                    'doctor': doctor,
+                    'staff': staff,
+                    'record_status': MedicalRecord.RecordStatus.DRAFT,
+                    'clinic_room': doctor.room_number,
+                    'department': doctor.department.dept_name if doctor.department else None,
+                }
+            )
+
+            chief_complaint = request.data.get('chief_complaint')
+            clinical_notes = request.data.get('clinical_notes')
+            record_status = request.data.get('record_status')
+            if record_status:
+                valid_statuses = {choice[0] for choice in MedicalRecord.RecordStatus.choices}
+                if record_status not in valid_statuses:
+                    return Response({'error': '유효하지 않은 기록 상태입니다.'}, status=status.HTTP_400_BAD_REQUEST)
+
+            if chief_complaint is not None:
+                medical_record.chief_complaint = chief_complaint
+            if clinical_notes is not None:
+                medical_record.clinical_notes = clinical_notes
+
+            if not medical_record.doctor_id:
+                medical_record.doctor = doctor
+            if not medical_record.staff_id:
+                medical_record.staff = staff
+            if not medical_record.record_date:
+                medical_record.record_date = timezone.now().date()
+            if not medical_record.record_time:
+                medical_record.record_time = timezone.now().time()
+            if not medical_record.clinic_room:
+                medical_record.clinic_room = doctor.room_number or encounter.current_location
+            if not medical_record.department and doctor.department:
+                medical_record.department = doctor.department.dept_name
+
+            if record_status:
+                medical_record.record_status = record_status
+            elif not medical_record.record_status:
+                medical_record.record_status = MedicalRecord.RecordStatus.DRAFT
+            medical_record.save()
+
+            serializer = MedicalRecordDetailSerializer(medical_record)
+            return Response(serializer.data, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
+        except Doctor.DoesNotExist:
+            return Response({'error': '의사 정보를 찾을 수 없습니다.'}, status=status.HTTP_404_NOT_FOUND)
+        except Encounter.DoesNotExist:
+            return Response({'error': '해당 방문 기록을 찾을 수 없습니다.'}, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
 class PatientMedicalRecordHistoryView(APIView):
     """특정 환자의 과거 진료 기록 목록 조회 API"""
     permission_classes = [IsDoctor]
@@ -412,6 +506,52 @@ class PatientMedicalRecordHistoryView(APIView):
 
 # Backward compatibility alias
 PatientEncounterHistoryView = PatientMedicalRecordHistoryView
+
+
+class PatientQuestionnaireHistoryView(APIView):
+    """특정 환자의 문진표 목록 조회 API"""
+    permission_classes = [IsDoctor]
+
+    def get(self, request, patient_id):
+        try:
+            questionnaires = Questionnaire.objects.filter(
+                encounter__patient_id=patient_id
+            ).select_related('encounter').order_by('-updated_at')
+
+            limit = request.query_params.get('limit')
+            if limit:
+                questionnaires = questionnaires[:int(limit)]
+
+            serializer = QuestionnaireSerializer(questionnaires, many=True)
+            return Response({
+                'count': questionnaires.count() if not limit else len(questionnaires),
+                'results': serializer.data,
+            }, status=status.HTTP_200_OK)
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class PatientVitalHistoryView(APIView):
+    """특정 환자의 바이탈 기록 목록 조회 API"""
+    permission_classes = [IsDoctor]
+
+    def get(self, request, patient_id):
+        try:
+            vitals = VitalData.objects.filter(
+                patient_id=patient_id
+            ).order_by('-measured_at', '-vital_id')
+
+            limit = request.query_params.get('limit')
+            if limit:
+                vitals = vitals[:int(limit)]
+
+            serializer = VitalDataSerializer(vitals, many=True)
+            return Response({
+                'count': vitals.count() if not limit else len(vitals),
+                'results': serializer.data,
+            }, status=status.HTTP_200_OK)
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 class PatientLabResultsView(APIView):
