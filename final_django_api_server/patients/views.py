@@ -10,8 +10,9 @@ from accounts.models import DutySchedule
 from django.db import IntegrityError
 from datetime import date, datetime, time, timedelta
 
-from .models import UserProfile, AppSyncRequest
-from .serializers import SignupSerializer, LoginSerializer, AppSyncRequestSerializer
+from .models import UserProfile, AppSyncRequest, Allergy, DiseaseHistory
+from .serializers import SignupSerializer, LoginSerializer, AppSyncRequestSerializer, AllergySerializer, DiseaseHistorySerializer
+from doctor.models import Patient, MedicalRecord, Prescription, Encounter
 
 
 @api_view(['POST'])
@@ -1445,14 +1446,12 @@ def create_questionnaire(request):
             'message': '진료 대기열에 등록되지 않았습니다. 원무과에 문의해주세요.'
         }, status=status.HTTP_400_BAD_REQUEST)
 
-    # 4-1. 진료대기/진료중 상태 체크 - 문진표 저장 불가
-    blocked_states = ['WAITING_CLINIC', 'IN_CLINIC']
-    if encounter.workflow_state in blocked_states:
-        state_label = '진료대기' if encounter.workflow_state == 'WAITING_CLINIC' else '진료중'
+    # 4-1. 진료중 상태 체크 - 문진표 저장 불가 (진료대기 상태에서는 작성 가능)
+    if encounter.workflow_state == 'IN_CLINIC':
         return Response({
             'success': False,
             'blocked': True,
-            'message': f'현재 {state_label} 상태입니다. 문진표를 저장할 수 없습니다.',
+            'message': '현재 진료중 상태입니다. 문진표를 저장할 수 없습니다.',
             'workflow_state': encounter.workflow_state,
         }, status=status.HTTP_400_BAD_REQUEST)
 
@@ -1559,16 +1558,14 @@ def get_questionnaire(request):
             'message': '진료 대기열에 등록되지 않았습니다.'
         }, status=status.HTTP_200_OK)
 
-    # 4-1. 진료대기/진료중 상태 체크 - 문진표 수정 불가
-    blocked_states = ['WAITING_CLINIC', 'IN_CLINIC']
-    if encounter.workflow_state in blocked_states:
+    # 4-1. 진료중 상태 체크 - 문진표 수정 불가 (진료대기 상태에서는 수정 가능)
+    if encounter.workflow_state == 'IN_CLINIC':
         questionnaire = Questionnaire.objects.filter(encounter=encounter).first()
-        state_label = '진료대기' if encounter.workflow_state == 'WAITING_CLINIC' else '진료중'
         return Response({
             'success': False,
             'blocked': True,
             'has_questionnaire': questionnaire is not None,
-            'message': f'현재 {state_label} 상태입니다. 문진표를 수정할 수 없습니다.',
+            'message': '현재 진료중 상태입니다. 문진표를 수정할 수 없습니다.',
             'workflow_state': encounter.workflow_state,
         }, status=status.HTTP_200_OK)
 
@@ -1742,4 +1739,939 @@ def get_queue_status(request):
         'estimated_wait_minutes': estimated_wait_minutes,
         'workflow_state': my_encounter.workflow_state,
         'workflow_state_display': my_encounter.get_workflow_state_display(),
+    }, status=status.HTTP_200_OK)
+
+
+# ==================== 알러지 관련 API ====================
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def get_allergies(request):
+    """
+    알러지 목록 조회 API (Flutter 앱용)
+
+    GET /api/patients/allergies/?profile_id=1
+    """
+    profile_id = request.query_params.get('profile_id')
+
+    if not profile_id:
+        return Response({
+            'success': False,
+            'message': 'profile_id가 필요합니다.'
+        }, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        profile = UserProfile.objects.get(profile_id=profile_id)
+    except UserProfile.DoesNotExist:
+        return Response({
+            'success': False,
+            'message': '존재하지 않는 사용자입니다.'
+        }, status=status.HTTP_404_NOT_FOUND)
+
+    allergies = Allergy.objects.filter(profile=profile).order_by('-created_at')
+    serializer = AllergySerializer(allergies, many=True)
+
+    return Response({
+        'success': True,
+        'allergies': serializer.data,
+        'count': allergies.count()
+    }, status=status.HTTP_200_OK)
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def create_allergy(request):
+    """
+    알러지 생성 API (Flutter 앱용)
+
+    POST /api/patients/allergies/
+    {
+        "profile_id": 1,
+        "allergy_type": "항생제",
+        "trigger_agent": "페니실린",
+        "reaction_desc": "피부 발진"
+    }
+    """
+    profile_id = request.data.get('profile_id')
+    allergy_type = request.data.get('allergy_type')
+    trigger_agent = request.data.get('trigger_agent')
+    reaction_desc = request.data.get('reaction_desc')
+
+    if not profile_id:
+        return Response({
+            'success': False,
+            'message': 'profile_id가 필요합니다.'
+        }, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        profile = UserProfile.objects.get(profile_id=profile_id)
+    except UserProfile.DoesNotExist:
+        return Response({
+            'success': False,
+            'message': '존재하지 않는 사용자입니다.'
+        }, status=status.HTTP_404_NOT_FOUND)
+
+    allergy = Allergy.objects.create(
+        profile=profile,
+        allergy_type=allergy_type,
+        trigger_agent=trigger_agent,
+        reaction_desc=reaction_desc
+    )
+
+    serializer = AllergySerializer(allergy)
+
+    return Response({
+        'success': True,
+        'message': '알러지가 등록되었습니다.',
+        'allergy': serializer.data
+    }, status=status.HTTP_201_CREATED)
+
+
+@api_view(['PUT'])
+@permission_classes([AllowAny])
+def update_allergy(request, allergy_id):
+    """
+    알러지 수정 API (Flutter 앱용)
+
+    PUT /api/patients/allergies/<allergy_id>/
+    {
+        "allergy_type": "소염진통제",
+        "trigger_agent": "이부프로펜",
+        "reaction_desc": "위장 장애"
+    }
+    """
+    try:
+        allergy = Allergy.objects.get(allergy_id=allergy_id)
+    except Allergy.DoesNotExist:
+        return Response({
+            'success': False,
+            'message': '존재하지 않는 알러지입니다.'
+        }, status=status.HTTP_404_NOT_FOUND)
+
+    allergy.allergy_type = request.data.get('allergy_type', allergy.allergy_type)
+    allergy.trigger_agent = request.data.get('trigger_agent', allergy.trigger_agent)
+    allergy.reaction_desc = request.data.get('reaction_desc', allergy.reaction_desc)
+    allergy.save()
+
+    serializer = AllergySerializer(allergy)
+
+    return Response({
+        'success': True,
+        'message': '알러지가 수정되었습니다.',
+        'allergy': serializer.data
+    }, status=status.HTTP_200_OK)
+
+
+@api_view(['DELETE'])
+@permission_classes([AllowAny])
+def delete_allergy(request, allergy_id):
+    """
+    알러지 삭제 API (Flutter 앱용)
+
+    DELETE /api/patients/allergies/<allergy_id>/
+    """
+    try:
+        allergy = Allergy.objects.get(allergy_id=allergy_id)
+    except Allergy.DoesNotExist:
+        return Response({
+            'success': False,
+            'message': '존재하지 않는 알러지입니다.'
+        }, status=status.HTTP_404_NOT_FOUND)
+
+    allergy.delete()
+
+    return Response({
+        'success': True,
+        'message': '알러지가 삭제되었습니다.'
+    }, status=status.HTTP_200_OK)
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def sync_allergies(request):
+    """
+    알러지 동기화 API (Flutter 앱용 - 전체 동기화)
+
+    POST /api/patients/allergies/sync/
+    {
+        "profile_id": 1,
+        "allergies": [
+            {"allergy_type": "항생제", "trigger_agent": "페니실린", "reaction_desc": "발진"},
+            {"allergy_type": "소염진통제", "trigger_agent": "아스피린", "reaction_desc": "호흡곤란"}
+        ]
+    }
+    """
+    profile_id = request.data.get('profile_id')
+    allergies_data = request.data.get('allergies', [])
+
+    if not profile_id:
+        return Response({
+            'success': False,
+            'message': 'profile_id가 필요합니다.'
+        }, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        profile = UserProfile.objects.get(profile_id=profile_id)
+    except UserProfile.DoesNotExist:
+        return Response({
+            'success': False,
+            'message': '존재하지 않는 사용자입니다.'
+        }, status=status.HTTP_404_NOT_FOUND)
+
+    # 기존 알러지 삭제 후 새로 추가
+    Allergy.objects.filter(profile=profile).delete()
+
+    created_allergies = []
+    for allergy_data in allergies_data:
+        allergy = Allergy.objects.create(
+            profile=profile,
+            allergy_type=allergy_data.get('allergy_type'),
+            trigger_agent=allergy_data.get('trigger_agent'),
+            reaction_desc=allergy_data.get('reaction_desc')
+        )
+        created_allergies.append(allergy)
+
+    serializer = AllergySerializer(created_allergies, many=True)
+
+    return Response({
+        'success': True,
+        'message': f'{len(created_allergies)}개의 알러지가 동기화되었습니다.',
+        'allergies': serializer.data,
+        'count': len(created_allergies)
+    }, status=status.HTTP_200_OK)
+
+
+# ==================== 기저질환 관련 API ====================
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def get_disease_histories(request):
+    """
+    기저질환 목록 조회 API (Flutter 앱용)
+
+    GET /api/patients/disease-histories/?profile_id=1
+    """
+    profile_id = request.query_params.get('profile_id')
+
+    if not profile_id:
+        return Response({
+            'success': False,
+            'message': 'profile_id가 필요합니다.'
+        }, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        profile = UserProfile.objects.get(profile_id=profile_id)
+    except UserProfile.DoesNotExist:
+        return Response({
+            'success': False,
+            'message': '존재하지 않는 사용자입니다.'
+        }, status=status.HTTP_404_NOT_FOUND)
+
+    diseases = DiseaseHistory.objects.filter(profile=profile).order_by('-created_at')
+    serializer = DiseaseHistorySerializer(diseases, many=True)
+
+    return Response({
+        'success': True,
+        'disease_histories': serializer.data,
+        'count': diseases.count()
+    }, status=status.HTTP_200_OK)
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def create_disease_history(request):
+    """
+    기저질환 생성 API (Flutter 앱용)
+
+    POST /api/patients/disease-histories/
+    {
+        "profile_id": 1,
+        "disease_name": "지방간",
+        "disease_code": "K76.0",
+        "diagnosis_date": "2024-01-01",
+        "severity_level": 1,
+        "is_active": true
+    }
+    """
+    profile_id = request.data.get('profile_id')
+    disease_name = request.data.get('disease_name')
+    disease_code = request.data.get('disease_code')
+    diagnosis_date = request.data.get('diagnosis_date')
+    severity_level = request.data.get('severity_level')
+    is_active = request.data.get('is_active', True)
+
+    if not profile_id:
+        return Response({
+            'success': False,
+            'message': 'profile_id가 필요합니다.'
+        }, status=status.HTTP_400_BAD_REQUEST)
+
+    if not disease_name:
+        return Response({
+            'success': False,
+            'message': 'disease_name이 필요합니다.'
+        }, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        profile = UserProfile.objects.get(profile_id=profile_id)
+    except UserProfile.DoesNotExist:
+        return Response({
+            'success': False,
+            'message': '존재하지 않는 사용자입니다.'
+        }, status=status.HTTP_404_NOT_FOUND)
+
+    disease = DiseaseHistory.objects.create(
+        profile=profile,
+        disease_name=disease_name,
+        disease_code=disease_code,
+        diagnosis_date=diagnosis_date,
+        severity_level=severity_level,
+        is_active=is_active
+    )
+
+    serializer = DiseaseHistorySerializer(disease)
+
+    return Response({
+        'success': True,
+        'message': '기저질환이 등록되었습니다.',
+        'disease_history': serializer.data
+    }, status=status.HTTP_201_CREATED)
+
+
+@api_view(['PUT'])
+@permission_classes([AllowAny])
+def update_disease_history(request, history_id):
+    """
+    기저질환 수정 API (Flutter 앱용)
+
+    PUT /api/patients/disease-histories/<history_id>/
+    {
+        "disease_name": "간경변",
+        "disease_code": "K74.6",
+        "severity_level": 3,
+        "is_active": true
+    }
+    """
+    try:
+        disease = DiseaseHistory.objects.get(history_id=history_id)
+    except DiseaseHistory.DoesNotExist:
+        return Response({
+            'success': False,
+            'message': '존재하지 않는 기저질환입니다.'
+        }, status=status.HTTP_404_NOT_FOUND)
+
+    disease.disease_name = request.data.get('disease_name', disease.disease_name)
+    disease.disease_code = request.data.get('disease_code', disease.disease_code)
+    disease.diagnosis_date = request.data.get('diagnosis_date', disease.diagnosis_date)
+    disease.severity_level = request.data.get('severity_level', disease.severity_level)
+    disease.is_active = request.data.get('is_active', disease.is_active)
+    disease.save()
+
+    serializer = DiseaseHistorySerializer(disease)
+
+    return Response({
+        'success': True,
+        'message': '기저질환이 수정되었습니다.',
+        'disease_history': serializer.data
+    }, status=status.HTTP_200_OK)
+
+
+@api_view(['DELETE'])
+@permission_classes([AllowAny])
+def delete_disease_history(request, history_id):
+    """
+    기저질환 삭제 API (Flutter 앱용)
+
+    DELETE /api/patients/disease-histories/<history_id>/
+    """
+    try:
+        disease = DiseaseHistory.objects.get(history_id=history_id)
+    except DiseaseHistory.DoesNotExist:
+        return Response({
+            'success': False,
+            'message': '존재하지 않는 기저질환입니다.'
+        }, status=status.HTTP_404_NOT_FOUND)
+
+    disease.delete()
+
+    return Response({
+        'success': True,
+        'message': '기저질환이 삭제되었습니다.'
+    }, status=status.HTTP_200_OK)
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def sync_disease_histories(request):
+    """
+    기저질환 동기화 API (Flutter 앱용 - 전체 동기화)
+
+    POST /api/patients/disease-histories/sync/
+    {
+        "profile_id": 1,
+        "disease_histories": [
+            {"disease_name": "지방간", "disease_code": "K76.0", "severity_level": 1, "is_active": true},
+            {"disease_name": "고혈압", "disease_code": "I10", "severity_level": 1, "is_active": true}
+        ]
+    }
+    """
+    profile_id = request.data.get('profile_id')
+    diseases_data = request.data.get('disease_histories', [])
+
+    if not profile_id:
+        return Response({
+            'success': False,
+            'message': 'profile_id가 필요합니다.'
+        }, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        profile = UserProfile.objects.get(profile_id=profile_id)
+    except UserProfile.DoesNotExist:
+        return Response({
+            'success': False,
+            'message': '존재하지 않는 사용자입니다.'
+        }, status=status.HTTP_404_NOT_FOUND)
+
+    # 기존 기저질환 삭제 후 새로 추가
+    DiseaseHistory.objects.filter(profile=profile).delete()
+
+    created_diseases = []
+    for disease_data in diseases_data:
+        disease = DiseaseHistory.objects.create(
+            profile=profile,
+            disease_name=disease_data.get('disease_name'),
+            disease_code=disease_data.get('disease_code'),
+            diagnosis_date=disease_data.get('diagnosis_date'),
+            severity_level=disease_data.get('severity_level'),
+            is_active=disease_data.get('is_active', True)
+        )
+        created_diseases.append(disease)
+
+    serializer = DiseaseHistorySerializer(created_diseases, many=True)
+
+    return Response({
+        'success': True,
+        'message': f'{len(created_diseases)}개의 기저질환이 동기화되었습니다.',
+        'disease_histories': serializer.data,
+        'count': len(created_diseases)
+    }, status=status.HTTP_200_OK)
+
+
+# ==================== 진료기록 관련 API ====================
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def get_medical_records(request):
+    """
+    진료기록 목록 조회 API (Flutter 앱용)
+
+    GET /api/patients/medical-records/?profile_id=1
+    GET /api/patients/medical-records/?profile_id=1&date=2025-01-15
+
+    Returns:
+        - 날짜별로 그룹화된 진료기록 목록
+        - 각 기록에는 날짜, 진료과, 담당의, 주호소, 처방 목록 포함
+    """
+    profile_id = request.query_params.get('profile_id')
+    date_filter = request.query_params.get('date')  # 선택적 날짜 필터
+
+    if not profile_id:
+        return Response({
+            'success': False,
+            'message': 'profile_id가 필요합니다.'
+        }, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        profile = UserProfile.objects.get(profile_id=profile_id)
+    except UserProfile.DoesNotExist:
+        return Response({
+            'success': False,
+            'message': '존재하지 않는 사용자입니다.'
+        }, status=status.HTTP_404_NOT_FOUND)
+
+    # profile과 연결된 Patient 찾기
+    try:
+        patient = Patient.objects.get(profile=profile)
+    except Patient.DoesNotExist:
+        return Response({
+            'success': True,
+            'message': '연결된 환자 정보가 없습니다.',
+            'medical_records': [],
+            'count': 0
+        }, status=status.HTTP_200_OK)
+
+    # 진료기록 조회 - COMPLETED 상태만
+    records = MedicalRecord.objects.filter(
+        patient=patient,
+        record_status='COMPLETED'
+    ).select_related('doctor', 'diagnosis_type', 'encounter').order_by('-record_date', '-record_time')
+
+    # 날짜 필터가 있으면 적용
+    if date_filter:
+        try:
+            filter_date = datetime.strptime(date_filter, '%Y-%m-%d').date()
+            records = records.filter(record_date=filter_date)
+        except ValueError:
+            pass
+
+    # 결과 직렬화
+    records_data = []
+    for record in records:
+        # 해당 encounter의 처방 조회
+        prescriptions = []
+        if record.encounter:
+            presc_list = Prescription.objects.filter(
+                encounter=record.encounter,
+                patient=patient
+            )
+            for p in presc_list:
+                prescriptions.append({
+                    'prescription_id': p.prescription_id,
+                    'medication_name': p.medication_name,
+                    'dosage': p.dosage,
+                    'frequency': p.frequency,
+                    'duration_days': p.duration_days,
+                })
+
+        records_data.append({
+            'record_id': record.record_id,
+            'record_date': record.record_date.isoformat() if record.record_date else None,
+            'record_time': record.record_time.strftime('%H:%M') if record.record_time else None,
+            'department': record.department,
+            'doctor_name': record.doctor.name if record.doctor else None,
+            'chief_complaint': record.chief_complaint,
+            'clinical_notes': record.clinical_notes,
+            'diagnosis_name': record.diagnosis_type.name if record.diagnosis_type else None,
+            'diagnosis_code': record.diagnosis_type.code if record.diagnosis_type else None,
+            'is_first_visit': record.is_first_visit,
+            'prescriptions': prescriptions,
+        })
+
+    return Response({
+        'success': True,
+        'medical_records': records_data,
+        'count': len(records_data)
+    }, status=status.HTTP_200_OK)
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def get_medical_record_detail(request, record_id):
+    """
+    진료기록 상세 조회 API (Flutter 앱용)
+
+    GET /api/patients/medical-records/<record_id>/
+    """
+    profile_id = request.query_params.get('profile_id')
+
+    if not profile_id:
+        return Response({
+            'success': False,
+            'message': 'profile_id가 필요합니다.'
+        }, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        profile = UserProfile.objects.get(profile_id=profile_id)
+        patient = Patient.objects.get(profile=profile)
+    except (UserProfile.DoesNotExist, Patient.DoesNotExist):
+        return Response({
+            'success': False,
+            'message': '존재하지 않는 사용자입니다.'
+        }, status=status.HTTP_404_NOT_FOUND)
+
+    try:
+        record = MedicalRecord.objects.select_related(
+            'doctor', 'diagnosis_type', 'encounter'
+        ).get(record_id=record_id, patient=patient)
+    except MedicalRecord.DoesNotExist:
+        return Response({
+            'success': False,
+            'message': '존재하지 않는 진료기록입니다.'
+        }, status=status.HTTP_404_NOT_FOUND)
+
+    # 처방 조회
+    prescriptions = []
+    if record.encounter:
+        presc_list = Prescription.objects.filter(
+            encounter=record.encounter,
+            patient=patient
+        )
+        for p in presc_list:
+            prescriptions.append({
+                'prescription_id': p.prescription_id,
+                'medication_name': p.medication_name,
+                'dosage': p.dosage,
+                'frequency': p.frequency,
+                'duration_days': p.duration_days,
+                'pharmacy_notes': p.pharmacy_notes,
+            })
+
+    record_data = {
+        'record_id': record.record_id,
+        'record_date': record.record_date.isoformat() if record.record_date else None,
+        'record_time': record.record_time.strftime('%H:%M') if record.record_time else None,
+        'department': record.department,
+        'clinic_room': record.clinic_room,
+        'doctor_name': record.doctor.name if record.doctor else None,
+        'chief_complaint': record.chief_complaint,
+        'clinical_notes': record.clinical_notes,
+        'diagnosis_name': record.diagnosis_type.name if record.diagnosis_type else None,
+        'diagnosis_code': record.diagnosis_type.code if record.diagnosis_type else None,
+        'is_first_visit': record.is_first_visit,
+        'visit_start': record.visit_start.strftime('%H:%M') if record.visit_start else None,
+        'visit_end': record.visit_end.strftime('%H:%M') if record.visit_end else None,
+        'lab_recorded': record.lab_recorded,
+        'ct_recorded': record.ct_recorded,
+        'prescriptions': prescriptions,
+    }
+
+    return Response({
+        'success': True,
+        'medical_record': record_data
+    }, status=status.HTTP_200_OK)
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def get_medical_record_dates(request):
+    """
+    진료기록이 있는 날짜 목록 조회 API (Flutter 앱용 - 캘린더 표시용)
+
+    GET /api/patients/medical-records/dates/?profile_id=1
+    GET /api/patients/medical-records/dates/?profile_id=1&year=2025&month=1
+
+    Returns:
+        - 진료기록이 있는 날짜 목록
+    """
+    profile_id = request.query_params.get('profile_id')
+    year = request.query_params.get('year')
+    month = request.query_params.get('month')
+
+    if not profile_id:
+        return Response({
+            'success': False,
+            'message': 'profile_id가 필요합니다.'
+        }, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        profile = UserProfile.objects.get(profile_id=profile_id)
+        patient = Patient.objects.get(profile=profile)
+    except (UserProfile.DoesNotExist, Patient.DoesNotExist):
+        return Response({
+            'success': True,
+            'dates': [],
+            'count': 0
+        }, status=status.HTTP_200_OK)
+
+    # 진료기록 날짜 조회
+    records = MedicalRecord.objects.filter(
+        patient=patient,
+        record_status='COMPLETED'
+    )
+
+    # 연월 필터
+    if year and month:
+        try:
+            records = records.filter(
+                record_date__year=int(year),
+                record_date__month=int(month)
+            )
+        except ValueError:
+            pass
+
+    # 중복 제거된 날짜 목록
+    dates = records.values_list('record_date', flat=True).distinct().order_by('-record_date')
+    date_list = [d.isoformat() for d in dates if d]
+
+    return Response({
+        'success': True,
+        'dates': date_list,
+        'count': len(date_list)
+    }, status=status.HTTP_200_OK)
+
+
+# ==================== 처방전 OCR 관련 API ====================
+
+from .models import Prescription as AppPrescription, MedicationDetail, PillInfo
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def create_ocr_prescription(request):
+    """
+    OCR 처방전 저장 API (Flutter 앱용)
+
+    POST /api/patients/prescriptions/ocr/
+    {
+        "profile_id": 1,
+        "hospital_name": "서울대학교병원",
+        "dispense_date": "2025-01-19",
+        "total_days": 7,
+        "medications": [
+            {
+                "item_name": "타이레놀",
+                "item_seq": 123456789,
+                "one_dose": "1정",
+                "daily_count": "3회",
+                "total_days": "7일"
+            }
+        ]
+    }
+    """
+    profile_id = request.data.get('profile_id')
+    hospital_name = request.data.get('hospital_name', '')
+    dispense_date = request.data.get('dispense_date')
+    medications = request.data.get('medications', [])
+
+    if not profile_id:
+        return Response({
+            'success': False,
+            'message': 'profile_id가 필요합니다.'
+        }, status=status.HTTP_400_BAD_REQUEST)
+
+    if not medications:
+        return Response({
+            'success': False,
+            'message': '약물 정보가 필요합니다.'
+        }, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        profile = UserProfile.objects.get(profile_id=profile_id)
+    except UserProfile.DoesNotExist:
+        return Response({
+            'success': False,
+            'message': '존재하지 않는 사용자입니다.'
+        }, status=status.HTTP_404_NOT_FOUND)
+
+    try:
+        # 1. Prescription 생성
+        prescription = AppPrescription.objects.create(
+            profile=profile,
+            hospital_name=hospital_name,
+            dispense_date=dispense_date if dispense_date else date.today()
+        )
+
+        # 2. MedicationDetail 생성
+        created_meds = []
+        for med in medications:
+            item_name = med.get('item_name', '')
+            item_seq = med.get('item_seq')
+            one_dose = med.get('one_dose')
+            daily_count = med.get('daily_count')
+            total_days = med.get('total_days')
+
+            # PillInfo 연결 (item_seq가 있으면)
+            pill_info = None
+            if item_seq:
+                try:
+                    pill_info = PillInfo.objects.get(item_seq=item_seq)
+                except PillInfo.DoesNotExist:
+                    pass  # pill_info 없이 저장
+
+            med_detail = MedicationDetail.objects.create(
+                pres=prescription,
+                item_name=item_name,
+                one_dose=one_dose,
+                daily_count=daily_count,
+                total_days=total_days,
+                is_taking=True,
+                pill_info=pill_info
+            )
+            created_meds.append({
+                'med_id': med_detail.med_id,
+                'item_name': med_detail.item_name,
+                'one_dose': med_detail.one_dose,
+                'daily_count': med_detail.daily_count,
+                'total_days': med_detail.total_days
+            })
+
+        return Response({
+            'success': True,
+            'message': '처방전이 저장되었습니다.',
+            'prescription': {
+                'pres_id': prescription.pres_id,
+                'hospital_name': prescription.hospital_name,
+                'dispense_date': prescription.dispense_date.isoformat() if prescription.dispense_date else None,
+                'medications': created_meds
+            }
+        }, status=status.HTTP_201_CREATED)
+
+    except Exception as e:
+        return Response({
+            'success': False,
+            'message': f'처방전 저장 중 오류가 발생했습니다: {str(e)}'
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def get_ocr_prescriptions(request):
+    """
+    OCR 처방전 목록 조회 API (Flutter 앱용)
+
+    GET /api/patients/prescriptions/?profile_id=1
+    """
+    profile_id = request.query_params.get('profile_id')
+
+    if not profile_id:
+        return Response({
+            'success': False,
+            'message': 'profile_id가 필요합니다.'
+        }, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        profile = UserProfile.objects.get(profile_id=profile_id)
+    except UserProfile.DoesNotExist:
+        return Response({
+            'success': False,
+            'message': '존재하지 않는 사용자입니다.'
+        }, status=status.HTTP_404_NOT_FOUND)
+
+    prescriptions = AppPrescription.objects.filter(profile=profile).order_by('-dispense_date', '-created_at')
+
+    prescriptions_data = []
+    for pres in prescriptions:
+        meds = MedicationDetail.objects.filter(pres=pres)
+        meds_data = [{
+            'med_id': m.med_id,
+            'item_name': m.item_name,
+            'one_dose': m.one_dose,
+            'daily_count': m.daily_count,
+            'total_days': m.total_days,
+            'is_taking': m.is_taking
+        } for m in meds]
+
+        prescriptions_data.append({
+            'pres_id': pres.pres_id,
+            'hospital_name': pres.hospital_name,
+            'dispense_date': pres.dispense_date.isoformat() if pres.dispense_date else None,
+            'created_at': pres.created_at.isoformat(),
+            'medications': meds_data
+        })
+
+    return Response({
+        'success': True,
+        'prescriptions': prescriptions_data,
+        'count': len(prescriptions_data)
+    }, status=status.HTTP_200_OK)
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def get_current_medications(request):
+    """
+    현재 복용중인 약물 목록 조회 API (Flutter 앱용)
+
+    GET /api/patients/medications/current/?profile_id=1
+    """
+    profile_id = request.query_params.get('profile_id')
+
+    if not profile_id:
+        return Response({
+            'success': False,
+            'message': 'profile_id가 필요합니다.'
+        }, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        profile = UserProfile.objects.get(profile_id=profile_id)
+    except UserProfile.DoesNotExist:
+        return Response({
+            'success': False,
+            'message': '존재하지 않는 사용자입니다.'
+        }, status=status.HTTP_404_NOT_FOUND)
+
+    # 복용중인 약물만 조회 (is_taking=True)
+    medications = MedicationDetail.objects.filter(
+        pres__profile=profile,
+        is_taking=True
+    ).select_related('pres', 'pill_info').order_by('-created_at')
+
+    meds_data = []
+    for med in medications:
+        meds_data.append({
+            'med_id': med.med_id,
+            'item_name': med.item_name,
+            'one_dose': med.one_dose,
+            'daily_count': med.daily_count,
+            'total_days': med.total_days,
+            'is_taking': med.is_taking,
+            'pres_id': med.pres.pres_id,
+            'hospital_name': med.pres.hospital_name,
+            'dispense_date': med.pres.dispense_date.isoformat() if med.pres.dispense_date else None,
+            'pill_info': {
+                'item_seq': med.pill_info.item_seq,
+                'item_image': med.pill_info.item_image,
+                'entp_name': med.pill_info.entp_name,
+                'class_name': med.pill_info.class_name
+            } if med.pill_info else None
+        })
+
+    return Response({
+        'success': True,
+        'medications': meds_data,
+        'count': len(meds_data)
+    }, status=status.HTTP_200_OK)
+
+
+@api_view(['PUT'])
+@permission_classes([AllowAny])
+def update_medication_status(request, med_id):
+    """
+    약물 복용 상태 업데이트 API (Flutter 앱용)
+
+    PUT /api/patients/medications/<med_id>/status/
+    {
+        "is_taking": false
+    }
+    """
+    is_taking = request.data.get('is_taking')
+
+    if is_taking is None:
+        return Response({
+            'success': False,
+            'message': 'is_taking 값이 필요합니다.'
+        }, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        medication = MedicationDetail.objects.get(med_id=med_id)
+    except MedicationDetail.DoesNotExist:
+        return Response({
+            'success': False,
+            'message': '존재하지 않는 약물입니다.'
+        }, status=status.HTTP_404_NOT_FOUND)
+
+    medication.is_taking = is_taking
+    medication.save()
+
+    return Response({
+        'success': True,
+        'message': '약물 상태가 업데이트되었습니다.',
+        'medication': {
+            'med_id': medication.med_id,
+            'item_name': medication.item_name,
+            'is_taking': medication.is_taking
+        }
+    }, status=status.HTTP_200_OK)
+
+
+@api_view(['DELETE'])
+@permission_classes([AllowAny])
+def delete_prescription(request, pres_id):
+    """
+    처방전 삭제 API (Flutter 앱용)
+
+    DELETE /api/patients/prescriptions/<pres_id>/
+    """
+    try:
+        prescription = AppPrescription.objects.get(pres_id=pres_id)
+    except AppPrescription.DoesNotExist:
+        return Response({
+            'success': False,
+            'message': '존재하지 않는 처방전입니다.'
+        }, status=status.HTTP_404_NOT_FOUND)
+
+    prescription.delete()
+
+    return Response({
+        'success': True,
+        'message': '처방전이 삭제되었습니다.'
     }, status=status.HTTP_200_OK)

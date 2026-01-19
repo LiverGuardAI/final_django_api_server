@@ -1,6 +1,6 @@
 # patients/serializers.py
 from rest_framework import serializers
-from .models import UserProfile, AppSyncRequest
+from .models import UserProfile, AppSyncRequest, Allergy, DiseaseHistory
 from django.contrib.auth.hashers import make_password
 from doctor.models import Doctor
 
@@ -124,3 +124,41 @@ class AppointmentCreateSerializer(serializers.Serializer):
         if not Doctor.objects.filter(doctor_id=value).exists():
             raise serializers.ValidationError("존재하지 않는 의사입니다.")
         return value
+
+
+# 알러지 Serializer
+class AllergySerializer(serializers.ModelSerializer):
+    """알러지 Serializer"""
+
+    class Meta:
+        model = Allergy
+        fields = [
+            'allergy_id',
+            'allergy_type',
+            'trigger_agent',
+            'reaction_desc',
+            'profile',
+            'created_at',
+            'updated_at',
+        ]
+        read_only_fields = ['allergy_id', 'created_at', 'updated_at']
+
+
+# 기저질환 Serializer
+class DiseaseHistorySerializer(serializers.ModelSerializer):
+    """기저질환 Serializer"""
+
+    class Meta:
+        model = DiseaseHistory
+        fields = [
+            'history_id',
+            'disease_code',
+            'disease_name',
+            'diagnosis_date',
+            'severity_level',
+            'is_active',
+            'profile',
+            'created_at',
+            'updated_at',
+        ]
+        read_only_fields = ['history_id', 'created_at', 'updated_at']

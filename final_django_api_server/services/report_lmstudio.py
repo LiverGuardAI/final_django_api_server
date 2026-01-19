@@ -4,9 +4,9 @@ import os
 import requests
 
 
-LMSTUDIO_URL = os.environ["LMSTUDIO_URL"]
-LMSTUDIO_MODEL = os.environ["LMSTUDIO_MODEL"]
-LMSTUDIO_TEMPERATURE = float(os.environ["LMSTUDIO_TEMPERATURE"])
+LMSTUDIO_URL = os.environ.get("LMSTUDIO_URL", "http://localhost:1234") #
+LMSTUDIO_MODEL = os.environ.get("LMSTUDIO_MODEL", "default")
+LMSTUDIO_TEMPERATURE = float(os.environ.get("LMSTUDIO_TEMPERATURE", "0.7"))
 
 SYSTEM_PROMPT = """
 You are a medical radiology report generator specialized in liver tumor analysis.
