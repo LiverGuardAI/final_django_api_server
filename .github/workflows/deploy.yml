@@ -39,11 +39,11 @@ jobs:
       - name: Deploy on GCP Server
         run: |
           ssh ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_IP }} << 'EOF'
-            cd ~/final_project
+          cd ~/final_project
 
-            # 최신 이미지 pull
-            docker pull duddns1008/final_django:latest
+          # 최신 이미지 pull
+          docker pull duddns1008/final_django:latest
 
-            # django + celery 같이 재시작
-            docker compose up -d django celery
+          # django + celery 같이 재시작
+          docker compose up -d django celery
           EOF 
