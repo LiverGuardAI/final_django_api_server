@@ -38,12 +38,8 @@ jobs:
       # 5. GCP 서버 접속해서 컨테이너 재시작
       - name: Deploy on GCP Server
         run: |
-          ssh ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_IP }} << 'EOF'
-          cd ~/final_project
-
-          # 최신 이미지 pull
-          docker pull duddns1008/final_django:latest
-
-          # django + celery 같이 재시작
-          docker compose up -d django celery
-          EOF 
+          ssh ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_IP }} "
+            cd ~/final_project &&
+            docker pull duddns1008/final_django:latest &&
+            docker compose up -d django celery
+          "
