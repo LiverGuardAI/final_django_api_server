@@ -464,8 +464,6 @@ class MedicalRecordSaveView(APIView):
                 medical_record.record_status = MedicalRecord.RecordStatus.DRAFT
             medical_record.save()
 
-<<<<<<< HEAD
-=======
             print(f"DEBUG: {request.data}")
             # 처방 약물 저장 로직
             medications = request.data.get('medications')
@@ -493,7 +491,6 @@ class MedicalRecordSaveView(APIView):
                     except Exception as e:
                         print(f"Prescription create failed: {e}")
 
->>>>>>> 1d01a7d278970d53511ae6f5e37dbb241c2e7e9b
             serializer = MedicalRecordDetailSerializer(medical_record)
             return Response(serializer.data, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
         except Doctor.DoesNotExist:
