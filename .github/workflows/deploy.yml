@@ -1,0 +1,49 @@
+name: Deploy Django to GCP
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. 코드 체크아웃
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # 2. DockerHub 로그인
+      - name: Login to DockerHub
+        uses: docker/login-action@v3
+        with:
+          username: duddns1008
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # 3. Docker 이미지 빌드 & 푸시
+      - name: Build and Push Docker image
+        run: |
+          docker build -t duddns1008/final_django:latest .
+          docker push duddns1008/final_django:latest
+
+      # 4. SSH 키 세팅
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H ${{ secrets.SERVER_IP }} >> ~/.ssh/known_hosts
+
+      # 5. GCP 서버 접속해서 컨테이너 재시작
+      - name: Deploy on GCP Server
+        run: |
+          ssh ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_IP }} << 'EOF'
+          cd ~/final_project
+
+          # 최신 이미지 pull
+          docker pull duddns1008/final_django:latest
+
+          # django + celery 같이 재시작
+          docker compose up -d django celery
+          EOF 
