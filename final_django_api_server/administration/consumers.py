@@ -140,6 +140,17 @@ class ClinicConsumer(AsyncWebsocketConsumer):
             'data': data
         }))
 
+    async def new_order(self, event):
+        """새 오더 생성 알림"""
+        message = event.get('message', '')
+        data = event.get('data', {})
+
+        await self.send(text_data=json.dumps({
+            'type': 'new_order',
+            'message': message,
+            'data': data
+        }))
+
     @database_sync_to_async
     def get_user_from_token(self, token):
         User = get_user_model()

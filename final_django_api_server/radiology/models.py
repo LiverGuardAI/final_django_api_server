@@ -35,6 +35,10 @@ class DICOMStudy(models.Model):
     study_description = models.CharField(max_length=255, blank=True, null=True)
     study_datetime = models.DateTimeField(blank=True, null=True)
     institution_name = models.CharField(max_length=64, blank=True, null=True)
+    started_at = models.DateTimeField(blank=True, null=True)
+    ended_at = models.DateTimeField(blank=True, null=True)
+    post_processing_started_at = models.DateTimeField(blank=True, null=True)
+    post_processing_completed_at = models.DateTimeField(blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

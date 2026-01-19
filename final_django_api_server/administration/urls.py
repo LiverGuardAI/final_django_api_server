@@ -19,9 +19,13 @@ from .views import (
     CompleteVitalOrPhysicalView,
     CancelEncounterView,
     DailyPatientStatusView,
+    AdministrationInfoView,
 )
 
 urlpatterns = [
+    # 원무과 직원 정보
+    path('me/', AdministrationInfoView.as_view(), name='administration_info'),
+
     # 대시보드
     path('dashboard/', AdministrationDashboardView.as_view(), name='administration_dashboard'),
     path('dashboard/stats/', DashboardStatsView.as_view(), name='dashboard_stats'),
@@ -44,7 +48,7 @@ urlpatterns = [
     path('queue/', WaitingQueueView.as_view(), name='waiting_queue'),  # /api/administration/queue/
     path('queue/waiting/', WaitingQueueView.as_view(), name='waiting_queue_alt'),  # 하위 호환성 유지
     path('queue/call-next/', CallNextPatientView.as_view(), name='call_next_patient'),
-    
+
     # 원무과 전용 분리형 대기열
     path('queue/admin/', AdministrationWaitingQueueView.as_view(), name='admin_waiting_queue'),
 

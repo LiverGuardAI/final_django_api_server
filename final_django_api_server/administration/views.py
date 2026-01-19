@@ -1390,3 +1390,64 @@ class DailyPatientStatusView(APIView):
             'stats': stats,
             'encounters': results
         }, status=status.HTTP_200_OK)
+
+
+class AdministrationInfoView(APIView):
+    """현재 로그인한 원무과 직원 정보 조회/수정 API"""
+    permission_classes = [IsClerk]
+
+    def get(self, request):
+        """
+        현재 로그인한 원무과 직원의 상세 정보 조회
+        """
+        try:
+            from .models import Administration
+            from .serializers import AdministrationSerializer
+
+            admin_staff = Administration.objects.select_related('department').get(user=request.user)
+            serializer = AdministrationSerializer(admin_staff)
+            return Response(serializer.data, status=status.HTTP_200_OK)
+
+        except Administration.DoesNotExist:
+            return Response({
+                'error': '원무과 직원 정보를 찾을 수 없습니다.'
+            }, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            return Response({
+                'error': str(e)
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    def patch(self, request):
+        """
+        현재 로그인한 원무과 직원의 정보 수정
+        """
+        try:
+            from .models import Administration
+            from .serializers import AdministrationSerializer
+
+            admin_staff = Administration.objects.select_related('department').get(user=request.user)
+
+            # 수정 가능한 필드들
+            allowed_fields = ['name', 'phone']
+
+            # date_of_birth는 별도 처리 (날짜 형식 검증)
+            if 'date_of_birth' in request.data and request.data['date_of_birth']:
+                admin_staff.date_of_birth = request.data['date_of_birth']
+
+            for field in allowed_fields:
+                if field in request.data:
+                    setattr(admin_staff, field, request.data[field])
+
+            admin_staff.save()
+
+            serializer = AdministrationSerializer(admin_staff)
+            return Response(serializer.data, status=status.HTTP_200_OK)
+
+        except Administration.DoesNotExist:
+            return Response({
+                'error': '원무과 직원 정보를 찾을 수 없습니다.'
+            }, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            return Response({
+                'error': str(e)
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

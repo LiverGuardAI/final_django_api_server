@@ -40,6 +40,7 @@ INSTALLED_APPS = [
     'patients',
     'ai_model_server',
     'orthanc_server',
+    'lis',
     'cdss_channels_redis',  # 채팅 기능
     'rest_framework',
     'rest_framework_simplejwt',

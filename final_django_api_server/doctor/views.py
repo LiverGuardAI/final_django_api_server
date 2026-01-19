@@ -743,7 +743,7 @@ class PatientCTSeriesView(APIView):
 
 
 class DoctorInfoView(APIView):
-    """현재 로그인한 의사 정보 조회 API"""
+    """현재 로그인한 의사 정보 조회/수정 API"""
     permission_classes = [IsDoctor]
 
     def get(self, request):
@@ -752,6 +752,38 @@ class DoctorInfoView(APIView):
         """
         try:
             doctor = Doctor.objects.select_related('department').get(user=request.user)
+            serializer = DoctorListSerializer(doctor)
+            return Response(serializer.data, status=status.HTTP_200_OK)
+
+        except Doctor.DoesNotExist:
+            return Response({
+                'error': '의사 정보를 찾을 수 없습니다.'
+            }, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            return Response({
+                'error': str(e)
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    def patch(self, request):
+        """
+        현재 로그인한 의사의 정보 수정
+        """
+        try:
+            doctor = Doctor.objects.select_related('department').get(user=request.user)
+
+            # 수정 가능한 필드들
+            allowed_fields = ['name', 'phone', 'room_number']
+
+            # date_of_birth는 별도 처리 (날짜 형식 검증)
+            if 'date_of_birth' in request.data and request.data['date_of_birth']:
+                doctor.date_of_birth = request.data['date_of_birth']
+
+            for field in allowed_fields:
+                if field in request.data:
+                    setattr(doctor, field, request.data[field])
+
+            doctor.save()
+
             serializer = DoctorListSerializer(doctor)
             return Response(serializer.data, status=status.HTTP_200_OK)
 

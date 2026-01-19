@@ -1,6 +1,6 @@
 from django.urls import path
 from rest_framework_simplejwt.views import TokenRefreshView
-from .views import LoginView, LogoutView, DoctorLoginView, AdministrationLoginView, RadiologyLoginView, StaffListView, PublicDutyScheduleView, BulkScheduleView
+from .views import LoginView, LogoutView, DoctorLoginView, LisLoginView, AdministrationLoginView, RadiologyLoginView, StaffListView, PublicDutyScheduleView, BulkScheduleView
 
 urlpatterns = [
     path('login/', LoginView.as_view(), name='login'),
@@ -12,6 +12,7 @@ urlpatterns = [
     path('staff/', StaffListView.as_view(), name='staff-list'),
     path('schedules/public/', PublicDutyScheduleView.as_view(), name='public-schedules'),
     path('schedules/bulk/', BulkScheduleView.as_view(), name='bulk-schedules'),
+    path('lis/login/', LisLoginView.as_view(), name='lis_login'),
 ]
 
 from rest_framework.routers import DefaultRouter

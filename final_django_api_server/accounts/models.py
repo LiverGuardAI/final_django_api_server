@@ -11,6 +11,7 @@ class CustomUser(AbstractUser):
         DOCTOR = 'DOCTOR', '의사'
         RADIOLOGIST = 'RADIOLOGIST', '영상의학과'
         CLERK = 'CLERK', '원무과'
+        LIS = 'LIS', '진단검사의학과'
 
     # Primary Key를 user_id로 변경
     id = None  # AbstractUser의 기본 id 제거
@@ -65,6 +66,7 @@ class OnlineStatus(models.Model):
         DOCTOR = 'DOCTOR', '의사'
         RADIOLOGIST = 'RADIOLOGIST', '영상의학과'
         CLERK = 'CLERK', '원무과'
+        LIS = 'LIS', '진단검사의학과'
 
     online_id = models.AutoField(primary_key=True)
     user = models.ForeignKey(CustomUser, on_delete=models.CASCADE, db_column='user_id')

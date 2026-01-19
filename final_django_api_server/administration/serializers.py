@@ -2,6 +2,7 @@
 from rest_framework import serializers
 from django.utils import timezone
 from doctor.models import Patient, Appointment, Encounter, MedicalRecord, LabOrder, DoctorToRadiologyOrder
+from .models import Administration
 from datetime import date
 
 # ---------------------------------------------------------
@@ -250,3 +251,35 @@ class MedicalRecordCreateSerializer(serializers.ModelSerializer):
             'patient', 'doctor', 'staff', 'encounter',
         ]
         read_only_fields = ['staff']
+
+
+# ---------------------------------------------------------
+# 5. Administration Serializer (원무과 직원 정보)
+# ---------------------------------------------------------
+class AdministrationSerializer(serializers.ModelSerializer):
+    """원무과 직원 정보 직렬화"""
+    department = serializers.SerializerMethodField()
+    user_id = serializers.IntegerField(source='user.user_id', read_only=True)
+
+    def get_department(self, obj):
+        if obj.department:
+            return {
+                'dept_id': obj.department.department_id,
+                'dept_name': obj.department.dept_name
+            }
+        return None
+
+    class Meta:
+        model = Administration
+        fields = [
+            'staff_id',
+            'user_id',
+            'name',
+            'employee_no',
+            'department',
+            'phone',
+            'date_of_birth',
+            'created_at',
+            'updated_at'
+        ]
+        read_only_fields = ['staff_id', 'user_id', 'employee_no', 'created_at', 'updated_at']

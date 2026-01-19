@@ -7,6 +7,7 @@ from django.db.models import Q
 from django.utils import timezone
 from accounts.permissions import IsRadiologist, IsDoctorOrRadiologist
 from doctor.models import Patient, Encounter
+from .models import DICOMStudy, DICOMSeries
 from .serializers import (
     PatientWaitlistSerializer,
     RadiologyQueueSerializer,
@@ -450,6 +451,81 @@ class DICOMStudyListView(APIView):
         }, status=status.HTTP_200_OK)
 
 
+class DICOMStudySeriesView(APIView):
+    """DICOM 스터디에 속한 Series 목록 조회 API"""
+    permission_classes = [IsDoctorOrRadiologist]
+
+    def get(self, request, study_uid):
+        study = DICOMStudy.objects.filter(study_uid=study_uid).first()
+        if not study:
+            return Response({
+                'study_uid': study_uid,
+                'series_ids': [],
+            }, status=status.HTTP_200_OK)
+
+        orthanc_study_id = study.orthanc_study_id
+        if not orthanc_study_id:
+            try:
+                search_response = requests.post(
+                    f'{ORTHANC_BASE_URL}/tools/find',
+                    json={
+                        "Level": "Study",
+                        "Query": {
+                            "StudyInstanceUID": study_uid
+                        }
+                    },
+                    timeout=10
+                )
+                if search_response.status_code == 200:
+                    matches = search_response.json()
+                    if matches:
+                        orthanc_study_id = matches[0]
+                        study.orthanc_study_id = orthanc_study_id
+                        study.save(update_fields=['orthanc_study_id'])
+            except Exception as exc:
+                print(f"Failed to resolve study UID {study_uid}: {exc}")
+
+        series_ids: list[str] = []
+        if orthanc_study_id:
+            try:
+                response = requests.get(
+                    f'{ORTHANC_BASE_URL}/studies/{orthanc_study_id}',
+                    timeout=10
+                )
+                if response.status_code == 200:
+                    series_ids = response.json().get('Series', [])
+            except Exception as exc:
+                print(f"Failed to fetch series for study {orthanc_study_id}: {exc}")
+
+        return Response({
+            'study_uid': study_uid,
+            'series_ids': series_ids,
+        }, status=status.HTTP_200_OK)
+
+
+class PostProcessingActiveView(APIView):
+    """후처리 중인 스터디 조회 API"""
+    permission_classes = [IsDoctorOrRadiologist]
+
+    def get(self, request):
+        active_study = DICOMStudy.objects.filter(
+            ended_at__isnull=False,
+            post_processing_started_at__isnull=False,
+            post_processing_completed_at__isnull=True,
+        ).order_by('-post_processing_started_at', '-ended_at').first()
+
+        if not active_study:
+            return Response({
+                'active': False,
+            }, status=status.HTTP_200_OK)
+
+        return Response({
+            'active': True,
+            'study_uid': active_study.study_uid,
+            'patient_id': active_study.patient_id,
+        }, status=status.HTTP_200_OK)
+
+
 class WaitlistView(APIView):
     """촬영 대기 환자 목록 조회 API (영상의학과 전용)"""
     permission_classes = [AllowAny]  # TODO: 나중에 IsRadiologist로 변경 필요
@@ -501,12 +577,27 @@ class WaitlistView(APIView):
                     'priority': order.priority,
                     'status': order.status,
                     'ordered_at': order.ordered_at.isoformat() if order.ordered_at else None,
+                    'order_notes': order.order_notes or None,
+                    'ordering_doctor_name': order.doctor.name if order.doctor else 'N/A',
                 }
                 for order in imaging_orders
             ]
 
             # 대기 시간 계산 (분 단위)
             waiting_minutes = int((now - enc.state_entered_at).total_seconds() / 60) if enc.state_entered_at else 0
+
+            active_study = DICOMStudy.objects.filter(
+                patient_id=enc.patient.patient_id,
+                ended_at__isnull=True
+            ).order_by('-started_at', '-created_at').first()
+            if not active_study and enc.workflow_state == Encounter.WorkflowState.IN_IMAGING:
+                now = timezone.now()
+                active_study = DICOMStudy.objects.create(
+                    study_uid=pydicom.uid.generate_uid(),
+                    patient_id=enc.patient.patient_id,
+                    study_datetime=now,
+                    started_at=enc.state_entered_at or now,
+                )
 
             queue_data.append({
                 'encounter_id': enc.encounter_id,
@@ -520,6 +611,7 @@ class WaitlistView(APIView):
                 'waiting_minutes': waiting_minutes,
                 'doctor_name': enc.assigned_doctor.name if enc.assigned_doctor else 'N/A',
                 'imaging_orders': orders_info,
+                'active_study_uid': active_study.study_uid if active_study else None,
             })
 
         # 통계 정보
@@ -559,6 +651,7 @@ class StartFilmingView(APIView):
         }
         """
         patient_id = request.data.get('patient_id')
+        study_uid = request.data.get('study_uid')
 
         if not patient_id:
             return Response({
@@ -590,6 +683,25 @@ class StartFilmingView(APIView):
             )
             imaging_orders.update(status='IN_PROGRESS')
 
+            # 촬영 시작 스터디 생성/재사용
+            active_study = DICOMStudy.objects.filter(
+                patient_id=patient_id,
+                ended_at__isnull=True
+            ).order_by('-started_at', '-created_at').first()
+
+            if not active_study:
+                if not study_uid:
+                    study_uid = pydicom.uid.generate_uid()
+                now = timezone.now()
+                active_study = DICOMStudy.objects.create(
+                    study_uid=study_uid,
+                    patient_id=patient_id,
+                    study_datetime=now,
+                    started_at=now,
+                )
+            else:
+                study_uid = active_study.study_uid
+
             # 캐시 무효화
             from administration.cache_manager import cache_manager
             cache_manager.redis_client.delete('waiting_queue_list:imaging')
@@ -610,7 +722,8 @@ class StartFilmingView(APIView):
 
             return Response({
                 'message': '촬영이 시작되었습니다',
-                'patient': serializer.data
+                'patient': serializer.data,
+                'study_uid': study_uid
             }, status=status.HTTP_200_OK)
 
         except Exception as e:
@@ -633,6 +746,7 @@ class EndFilmingView(APIView):
         }
         """
         patient_id = request.data.get('patient_id')
+        study_uid = request.data.get('study_uid')
 
         if not patient_id:
             return Response({
@@ -660,6 +774,18 @@ class EndFilmingView(APIView):
                 status='IN_PROGRESS'
             )
             imaging_orders.update(status='COMPLETED')
+
+            # 촬영 종료 스터디 종료 시간 기록
+            study_qs = DICOMStudy.objects.filter(patient_id=patient_id, ended_at__isnull=True)
+            if study_uid:
+                study_qs = study_qs.filter(study_uid=study_uid)
+            active_study = study_qs.order_by('-started_at', '-created_at').first()
+            if active_study:
+                now = timezone.now()
+                active_study.ended_at = now
+                if not active_study.post_processing_started_at:
+                    active_study.post_processing_started_at = now
+                active_study.save(update_fields=['ended_at', 'post_processing_started_at'])
 
             # **FIX**: 촬영 완료 후 다음 단계 결정
             # 1. 다른 IMAGING 오더(WAITING 상태)가 남아있는지 확인
@@ -1077,6 +1203,13 @@ class CTReportCreateView(APIView):
         })
         if serializer.is_valid():
             report = serializer.save()
+            series = DICOMSeries.objects.filter(series_uid=series_instance_uid).first()
+            if series and series.study:
+                now = timezone.now()
+                if not series.study.post_processing_started_at:
+                    series.study.post_processing_started_at = now
+                series.study.post_processing_completed_at = now
+                series.study.save(update_fields=['post_processing_started_at', 'post_processing_completed_at'])
             return Response(CTReportSerializer(report).data, status=status.HTTP_201_CREATED)
 
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
