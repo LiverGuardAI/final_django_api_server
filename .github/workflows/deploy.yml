@@ -46,4 +46,4 @@ jobs:
 
             # django + celery 같이 재시작
             docker compose up -d django celery
-          EOF
+          EOF 
