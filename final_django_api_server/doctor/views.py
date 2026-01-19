@@ -3,7 +3,7 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from accounts.permissions import IsDoctor
-from .models import Encounter, MedicalRecord, Patient, Doctor, LabResult, DoctorToRadiologyOrder, HCCDiagnosis, GenomicData, LabOrder, AnthropometricData, Announcement, ScheduleDoctor, Questionnaire, VitalData
+from .models import Encounter, MedicalRecord, Patient, Doctor, LabResult, DoctorToRadiologyOrder, HCCDiagnosis, GenomicData, LabOrder, AnthropometricData, Announcement, ScheduleDoctor, Questionnaire, VitalData, Prescription
 from radiology.models import DICOMStudy, DICOMSeries
 from .serializers import (
     EncounterSerializer, MedicalRecordSerializer, UpdateEncounterStatusSerializer, DoctorListSerializer,
@@ -463,6 +463,33 @@ class MedicalRecordSaveView(APIView):
             elif not medical_record.record_status:
                 medical_record.record_status = MedicalRecord.RecordStatus.DRAFT
             medical_record.save()
+
+            print(f"DEBUG: {request.data}")
+            # 처방 약물 저장 로직
+            medications = request.data.get('medications')
+            if medications is not None: 
+                # 기존 처방 삭제 (덮어쓰기 로직 - 수정 시 중복 방지)
+                Prescription.objects.filter(encounter=encounter).delete()
+                
+                for med in medications:
+                    try:
+                        # days 값을 정수로 변환 (없으면 None)
+                        days_int = int(med.get('days', 0)) if med.get('days') else None
+                        
+                        Prescription.objects.create(
+                            patient=encounter.patient,
+                            encounter=encounter,
+                            doctor=doctor,
+                            department=doctor.department,
+                            prescription_date=timezone.now().date(),
+                            item_seq=0, # 임시 시퀀스 값
+                            medication_name=med.get('name', ''),
+                            dosage=med.get('dosage', ''),
+                            frequency=med.get('frequency', ''),
+                            duration_days=days_int
+                        )
+                    except Exception as e:
+                        print(f"Prescription create failed: {e}")
 
             serializer = MedicalRecordDetailSerializer(medical_record)
             return Response(serializer.data, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
