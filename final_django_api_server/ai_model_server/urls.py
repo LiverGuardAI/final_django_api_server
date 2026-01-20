@@ -1,5 +1,5 @@
 from django.urls import path
-from .views import CreateSegmentationMaskView, SegmentationTaskStatusView, CreateFeatureExtractionView, FeatureExtractionTaskStatusView
+from .views import CreateSegmentationMaskView, ReportGenerateView, LMStudioReportGenerateView, SegmentationTaskStatusView, CreateFeatureExtractionView, FeatureExtractionTaskStatusView, ClinicalNoteGenerateView
 
 from .views import BentoMLHealthView, PredictStageView, PredictRelapseView, PredictSurvivalView, PredictAllView, PredictionTaskStatusView, search_drugs, DDIAnalysisView
 
@@ -21,4 +21,9 @@ urlpatterns = [
     path('bentoml/prediction/status/<str:task_id>/', PredictionTaskStatusView.as_view(), name='prediction_status'),
     path('bentoml/drugs/search/', search_drugs, name='search_drugs'),
     path('bentoml/ddi/analyze/', DDIAnalysisView.as_view(), name='ddi_analyze'),
+    
+    # open api view
+    path('openapi/ct-report/generate/', ReportGenerateView.as_view(), name='ct_report_generate'),
+    path('openapi/clinical-note/generate/', ClinicalNoteGenerateView.as_view(), name='clinical_note_generate'),
+    path('lmstudio/ct-report/generate/', LMStudioReportGenerateView.as_view(), name='lmstudio_ct_report_generate'),
 ]

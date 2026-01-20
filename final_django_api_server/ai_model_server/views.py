@@ -17,6 +17,9 @@ from .tasks import (
     process_all_predictions
 )
 
+
+
+
 # ============================================================
 # [추가] 약물 검색 엔진 데이터 로드 (서버 시작 시 1회 실행)
 # ============================================================
@@ -34,7 +37,7 @@ except Exception as e:
 
 
 # ============================================================
-# AI Segmentation & Feature Extraction (Mosec)
+# AI Segmentation & Feature Extraction (Mosec) - [팀원 코드 보존]
 # ============================================================
 
 class CreateSegmentationMaskView(APIView):
@@ -63,10 +66,7 @@ class CreateSegmentationMaskView(APIView):
         series_id = request.data.get('series_id')
 
         if not series_id:
-            return Response({
-                'error': 'series_id is required'
-            }, status=status.HTTP_400_BAD_REQUEST)
-
+            return Response({'error': 'series_id is required'}, status=status.HTTP_400_BAD_REQUEST)
         try:
             # Celery task 시작
             task = process_segmentation.delay(series_id)
@@ -79,11 +79,7 @@ class CreateSegmentationMaskView(APIView):
             }, status=status.HTTP_202_ACCEPTED)
 
         except Exception as e:
-            return Response({
-                'error': 'Failed to create task',
-                'details': str(e)
-            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
+            return Response({'error': 'Failed to create task', 'details': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 class SegmentationTaskStatusView(APIView):
     """
@@ -92,27 +88,11 @@ class SegmentationTaskStatusView(APIView):
     permission_classes = [AllowAny]
 
     def get(self, request, task_id):
-        """
-        Task ID로 작업 상태 조회
-
-        Response:
-        {
-            "task_id": "task-id",
-            "status": "PENDING|PROGRESS|SUCCESS|FAILURE",
-            "result": {...} or "error": "..."
-        }
-        """
         try:
-            # Import inside method to avoid circular import
             from celery.result import AsyncResult
 
             task_result = AsyncResult(task_id)
-
-            response_data = {
-                'task_id': task_id,
-                'status': task_result.state,
-            }
-
+            response_data = {'task_id': task_id, 'status': task_result.state}
             if task_result.state == 'PENDING':
                 response_data['message'] = 'Task is waiting to be processed'
             elif task_result.state == 'PROGRESS':
@@ -127,11 +107,7 @@ class SegmentationTaskStatusView(APIView):
             return Response(response_data, status=status.HTTP_200_OK)
 
         except Exception as e:
-            return Response({
-                'error': 'Failed to fetch task status',
-                'details': str(e)
-            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
+            return Response({'error': 'Failed to fetch task status', 'details': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 class FeatureExtractionTaskStatusView(APIView):
     """
@@ -147,12 +123,7 @@ class FeatureExtractionTaskStatusView(APIView):
             from celery.result import AsyncResult
 
             task_result = AsyncResult(task_id)
-
-            response_data = {
-                'task_id': task_id,
-                'status': task_result.state,
-            }
-
+            response_data = {'task_id': task_id, 'status': task_result.state}
             if task_result.state == 'PENDING':
                 response_data['message'] = 'Task is waiting to be processed'
             elif task_result.state == 'PROGRESS':
@@ -167,11 +138,7 @@ class FeatureExtractionTaskStatusView(APIView):
             return Response(response_data, status=status.HTTP_200_OK)
 
         except Exception as e:
-            return Response({
-                'error': 'Failed to fetch task status',
-                'details': str(e)
-            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
+            return Response({'error': 'Failed to fetch task status', 'details': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 class CreateFeatureExtractionView(APIView):
     """
@@ -181,27 +148,7 @@ class CreateFeatureExtractionView(APIView):
     permission_classes = [AllowAny]
 
     def post(self, request):
-        """
-        SeriesInstanceUID를 받아서 Celery Task를 생성하고 AI 처리를 시작
-
-        Request Body:
-        {
-            "seriesinstanceuid": "dicom-series-instance-uid"
-        }
-
-        Response:
-        {
-            "task_id": "celery-task-id",
-            "status": "pending",
-            "message": "Feature extraction task started"
-        }
-        """
-        series_instance_uid = (
-            request.data.get('seriesinstanceuid')
-            or request.data.get('SeriesInstanceUID')
-            or request.data.get('series_instance_uid')
-        )
-
+        series_instance_uid = request.data.get('seriesinstanceuid') or request.data.get('SeriesInstanceUID') or request.data.get('series_instance_uid')
         if not series_instance_uid:
             return Response({
                 'error': 'seriesinstanceuid is required'
@@ -218,15 +165,7 @@ class CreateFeatureExtractionView(APIView):
             }, status=status.HTTP_202_ACCEPTED)
 
         except Exception as e:
-            return Response({
-                'error': 'Failed to create task',
-                'details': str(e)
-            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-
-# ========================
-# BentoML Proxy APIs
-# ========================
+            return Response({'error': 'Failed to create task', 'details': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 class BentoMLHealthView(APIView):
     """BentoML 서비스 상태 확인"""
@@ -238,11 +177,8 @@ class BentoMLHealthView(APIView):
             resp = requests.post(url, json={}, timeout=10)
             return Response(resp.json(), status=resp.status_code)
         except Exception as e:
-            return Response(
-                {"status": "error", "message": str(e)},
-                status=status.HTTP_503_SERVICE_UNAVAILABLE
-            )
-            
+            return Response({"status": "error", "message": str(e)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
 class PredictStageView(APIView):
     """
     Task 1: 병기 예측 (Celery Task 사용)
@@ -273,14 +209,7 @@ class PredictStageView(APIView):
 
             # Celery task 시작
             task = process_stage_prediction.delay(clinical, series_uid)
-
-            return Response({
-                'task_id': task.id,
-                'status': 'pending',
-                'message': 'Stage prediction task started',
-                'series_uid': series_uid
-            }, status=status.HTTP_202_ACCEPTED)
-
+            return Response({'task_id': task.id, 'status': 'pending'}, status=status.HTTP_202_ACCEPTED)
         except Exception as e:
             return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
@@ -298,8 +227,7 @@ class PredictRelapseView(APIView):
 
     def post(self, request):
         try:
-            clinical = request.data.get('clinical', [])
-            mrna = request.data.get('mrna', [])
+            clinical, mrna = request.data.get('clinical', []), request.data.get('mrna', [])
             series_uid = request.data.get('series_uid') or request.data.get('seriesinstanceuid')
 
             if len(clinical) != 11:
@@ -315,14 +243,7 @@ class PredictRelapseView(APIView):
 
             # Celery task 시작
             task = process_relapse_prediction.delay(clinical, mrna, series_uid)
-
-            return Response({
-                'task_id': task.id,
-                'status': 'pending',
-                'message': 'Relapse prediction task started',
-                'series_uid': series_uid
-            }, status=status.HTTP_202_ACCEPTED)
-
+            return Response({'task_id': task.id, 'status': 'pending'}, status=status.HTTP_202_ACCEPTED)
         except Exception as e:
             return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
@@ -340,8 +261,7 @@ class PredictSurvivalView(APIView):
 
     def post(self, request):
         try:
-            clinical = request.data.get('clinical', [])
-            mrna = request.data.get('mrna', [])
+            clinical, mrna = request.data.get('clinical', []), request.data.get('mrna', [])
             series_uid = request.data.get('series_uid') or request.data.get('seriesinstanceuid')
 
             if len(clinical) != 11:
@@ -357,14 +277,7 @@ class PredictSurvivalView(APIView):
 
             # Celery task 시작
             task = process_survival_prediction.delay(clinical, mrna, series_uid)
-
-            return Response({
-                'task_id': task.id,
-                'status': 'pending',
-                'message': 'Survival prediction task started',
-                'series_uid': series_uid
-            }, status=status.HTTP_202_ACCEPTED)
-
+            return Response({'task_id': task.id, 'status': 'pending'}, status=status.HTTP_202_ACCEPTED)
         except Exception as e:
             return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
@@ -382,8 +295,7 @@ class PredictAllView(APIView):
 
     def post(self, request):
         try:
-            clinical = request.data.get('clinical', [])
-            mrna = request.data.get('mrna', [])
+            clinical, mrna = request.data.get('clinical', []), request.data.get('mrna', [])
             series_uid = request.data.get('series_uid') or request.data.get('seriesinstanceuid')
 
             if not series_uid:
@@ -394,14 +306,7 @@ class PredictAllView(APIView):
 
             # Celery task 시작
             task = process_all_predictions.delay(clinical, mrna, series_uid)
-
-            return Response({
-                'task_id': task.id,
-                'status': 'pending',
-                'message': 'All predictions task started',
-                'series_uid': series_uid
-            }, status=status.HTTP_202_ACCEPTED)
-
+            return Response({'task_id': task.id, 'status': 'pending'}, status=status.HTTP_202_ACCEPTED)
         except Exception as e:
             return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
@@ -446,78 +351,73 @@ class PredictionTaskStatusView(APIView):
             return Response(response_data, status=status.HTTP_200_OK)
 
         except Exception as e:
-            return Response({
-                'error': 'Failed to fetch task status',
-                'details': str(e)
-            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
 
 
 # ============================================================
-# [추가] 약물 검색 및 DDI 분석 API (doctor/views.py에서 이동)
+# 💊 [V8.9.8 PRO] 약물 검색 및 DDI 통합 분석 API (수정 적용)
 # ============================================================
 
-@api_view(['GET'])
+@api_view(['POST', 'GET']) # React v8.9.5+의 GET/POST 모두 대응
 @permission_classes([AllowAny])
 def search_drugs(request):
-    """약물 마스터 CSV 기반 통합 검색 API"""
-    query = request.query_params.get('q', '').strip()
+    """
+    BentoML 엔진의 인메모리 마스터 DB를 사용하여 약물을 검색합니다.
+    """
+    if request.method == 'POST':
+        query = request.data.get('q', '').strip()
+    else:
+        query = request.query_params.get('q', '').strip()
+
     if not query:
         return Response([])
 
-    # 제품명(item_name) 또는 성분명(ko/en)에서 검색어 포함 여부 확인
-    mask = (
-        drug_db['item_name'].str.contains(query, case=False, na=False) |
-        drug_db['ingr_name_ko'].str.contains(query, case=False, na=False) |
-        drug_db['ingr_name_en'].str.contains(query, case=False, na=False)
-    )
-    
-    # 상위 15개 결과 추출 및 전송
-    results = drug_db[mask].head(15)
-    data = [
-        {
-            "item_name": row['item_name'],
-            "name_kr": row['ingr_name_ko'],
-            "name_en": row['ingr_name_en']
-        }
-        for _, row in results.iterrows()
-    ]
-    return Response(data)
+    try:
+        # 💡 BentoML은 @bentoml.api에서 POST와 JSON 바디를 기대합니다.
+        target_url = f"{settings.BENTOML_SERVER_URL}/search_master"
+        response = requests.post(target_url, json={'q': query}, timeout=5)
+        
+        if response.status_code == 200:
+            return Response(response.json())
+        return Response({"error": "BentoML 검색 서버 응답 오류"}, status=response.status_code)
+    except Exception as e:
+        logger.error(f"Search API Connection Failed: {str(e)}")
+        return Response({"error": "AI 엔진 서버와 연결할 수 없습니다."}, status=503)
 
 
 class DDIAnalysisView(APIView):
-    """BentoML 엔진을 사용한 약물 상호작용 분석"""
-    permission_classes = [AllowAny]
+    """
+    💡 [400 Error 해결] 유연한 키 매핑(prescription/drugs)을 적용한 통합 분석 뷰
+    """
+    permission_classes = [AllowAny] # 테스트 편의를 위해 AllowAny (필요시 IsAuthenticated로 변경)
 
     def post(self, request):
-        drugs = request.data.get('drugs', [])
-        if len(drugs) < 2:
-            return Response({"error": "최소 2개의 약물이 필요합니다."}, status=400)
+        # 1. 💡 [핵심] 리액트가 'prescription' 또는 'drugs' 어떤 키로 보내든 모두 수용합니다.
+        prescription = request.data.get('prescription') or request.data.get('drugs') or []
+        
+        # 2. 유효성 검사 (데이터가 제대로 전달되었는지 확인)
+        if not isinstance(prescription, list) or len(prescription) < 2:
+            logger.warning(f"Invalid prescription data received: {prescription}")
+            return Response({"error": "분석을 위해 최소 2개의 약물이 필요합니다."}, status=400)
 
         try:
-            # 💡 [방어 코드] 리액트에서 객체가 오든 글자가 오든 안전하게 추출
-            d1 = drugs[0]
-            d2 = drugs[1]
-
-            payload = {
-                "drug_a": { 
-                    "name_kr": d1.get('name_kr', d1) if isinstance(d1, dict) else d1, 
-                    "name_en": d1.get('name_en', d1) if isinstance(d1, dict) else d1 
-                },
-                "drug_b": { 
-                    "name_kr": d2.get('name_kr', d2) if isinstance(d2, dict) else d2, 
-                    "name_en": d2.get('name_en', d2) if isinstance(d2, dict) else d2 
-                }
-            }
-
-            # AI 서버 호출 (settings.BENTOML_SERVER_URL 사용 권장)
-            # 여기서는 명확성을 위해 직접 주소를 쓰거나 settings를 활용
+            # 3. BentoML 통합 분석 엔드포인트 호출
             target_url = f"{settings.BENTOML_SERVER_URL}/check_ddi"
-            response = requests.post(target_url, json=payload, timeout=15)
-            response.raise_for_status()
             
-            return Response(response.json(), status=200)
+            # 💡 BentoML service.py의 check_ddi(self, prescription: List)와 이름 일치
+            payload = {"prescription": prescription}
+            
+            response = requests.post(target_url, json=payload, timeout=20)
+            
+            if response.status_code == 200:
+                # BentoML이 생성한 interactions 리포트를 리액트로 즉시 전달
+                return Response(response.json())
+            else:
+                logger.error(f"BentoML Analysis Error: {response.text}")
+                return Response({"error": "AI 분석 엔진 응답 오류"}, status=response.status_code)
 
-        except requests.exceptions.RequestException as e:
-            return Response({"error": "AI 분석 엔진이 응답하지 않습니다."}, status=503)
+        except requests.exceptions.Timeout:
+            return Response({"error": "분석 시간이 초과되었습니다."}, status=504)
         except Exception as e:
             return Response({"error": f"서버 내부 오류: {str(e)}"}, status=500)
