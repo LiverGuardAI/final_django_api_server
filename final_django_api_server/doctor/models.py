@@ -40,16 +40,12 @@ class ScheduleDoctor(models.Model):
     class DoctorScheduleType(models.TextChoices):
         OUTPATIENT = 'OUTPATIENT', '외래'
         SURGERY = 'SURGERY', '수술'
-        CONFERENCE = 'CONFERENCE', '회의'
-        VACATION = 'VACATION', '휴가'
-        OTHER = 'OTHER', '기타'
 
     schedule_id = models.AutoField(primary_key=True)
     schedule_date = models.DateField()
     schedule_type = DoctorScheduleTypeField(choices=DoctorScheduleType.choices)
     start_time = models.TimeField()
     end_time = models.TimeField()
-    clinic_room = models.CharField(max_length=20, blank=True, null=True)
     notes = models.TextField(blank=True, null=True)
     is_available = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -217,6 +213,10 @@ class Encounter(models.Model):
             self.status = self.Status.COMPLETED
             if not self.end_time:
                 self.end_time = timezone.now()
+            # 연결된 Appointment 상태도 '진료완료'로 변경
+            if self.appointment:
+                self.appointment.status = '진료완료'
+                self.appointment.save()
         elif new_state == self.WorkflowState.CANCELLED:
             self.status = self.Status.CANCELLED
             if not self.end_time:
@@ -226,6 +226,7 @@ class Encounter(models.Model):
 
         # 4. Redis Cache 업데이트 (상태 변화에 따른 카운트 조정)
         try:
+            # === 진료 대기열 (Clinic) ===
             # 진료 대기 -> 진료 중
             if old_state == self.WorkflowState.WAITING_CLINIC and new_state == self.WorkflowState.IN_CLINIC:
                 cache_manager.decrement_waiting_count('clinic')
@@ -233,13 +234,64 @@ class Encounter(models.Model):
             # 진료 중 -> 완료 (또는 수납대기/결과대기 등으로 나감)
             elif old_state == self.WorkflowState.IN_CLINIC and new_state != self.WorkflowState.IN_CLINIC:
                 cache_manager.decrement_in_progress_count('clinic')
-                # 주의: 수납대기 등은 별도 카운트가 없다면 in_progress만 감소시킴
+
+            # === 영상의학과 대기열 (Imaging) ===
+            # 이전 상태가 촬영 대기였다면 카운트 감소
+            if old_state == self.WorkflowState.WAITING_IMAGING:
+                cache_manager.decrement_waiting_count('imaging')
+            # 이전 상태가 촬영 중이었다면 카운트 감소
+            elif old_state == self.WorkflowState.IN_IMAGING:
+                cache_manager.decrement_in_progress_count('imaging')
+
+            # 새로운 상태가 촬영 대기라면 카운트 증가
+            if new_state == self.WorkflowState.WAITING_IMAGING:
+                cache_manager.increment_waiting_count('imaging')
+            # 새로운 상태가 촬영 중이라면 카운트 증가
+            elif new_state == self.WorkflowState.IN_IMAGING:
+                cache_manager.increment_in_progress_count('imaging')
+                
+            # WebSocket 알림 전송 (대기열 목록 갱신용)
+            from channels.layers import get_channel_layer
+            from asgiref.sync import async_to_sync
             
-            # 기타 필요한 Redis 로직 추가 가능
-            
+            channel_layer = get_channel_layer()
+            async_to_sync(channel_layer.group_send)(
+                'clinic_dashboard',
+                {
+                    'type': 'update_queue',
+                    'message': 'Encounter status changed',
+                    'data': {
+                        'encounter_id': self.encounter_id,
+                        'old_state': old_state,
+                        'new_state': new_state
+                    }
+                }
+            )
+
         except Exception as e:
-            print(f"Redis cache update failed: {e}")
+            print(f"Redis/WebSocket update failed: {e}")
             # 캐시 업데이트 실패가 트랜잭션을 롤백시키면 안 됨 (로그만 남김)
+
+        # 5. 원무과 알림 전송 (수납 대기 / 오더 대기)
+        try:
+            from administration.utils import send_notification_to_administration
+            
+            patient_name = self.patient.name if self.patient else "환자"
+            
+            if new_state == self.WorkflowState.WAITING_RESULTS:
+                 # 오더 대기 (검사 결과 대기 포함이지만, 진입 시점은 '새 오더 발생' 시점임)
+                send_notification_to_administration(
+                    'new_order', 
+                    f"새로운 오더가 도착했습니다: {patient_name}"
+                )
+            elif new_state == self.WorkflowState.WAITING_PAYMENT:
+                # 수납 대기
+                send_notification_to_administration(
+                    'payment_waiting', 
+                    f"수납 대기 환자가 발생했습니다: {patient_name}"
+                )
+        except Exception as e:
+            print(f"Notification sending failed: {e}")
         ordering = ['state_entered_at']  # FIFO 대기열
 
     def __str__(self):
@@ -345,8 +397,10 @@ class VitalData(models.Model):
 
     vital_id = models.AutoField(primary_key=True)
     measured_at = models.DateField()
-    sbp = models.IntegerField(blank=True, null=True)
-    dbp = models.IntegerField(blank=True, null=True)
+    sbp = models.IntegerField(blank=True, null=True)  # 수축기 혈압
+    dbp = models.IntegerField(blank=True, null=True)  # 이완기 혈압
+    heart_rate = models.IntegerField(blank=True, null=True)  # 심박수 (bpm)
+    temperature = models.DecimalField(max_digits=4, decimal_places=1, blank=True, null=True)  # 체온 (°C)
     patient = models.ForeignKey(Patient, on_delete=models.CASCADE, db_column='patient_id')
     medical_record = models.ForeignKey(
         MedicalRecord,
@@ -485,7 +539,7 @@ class DoctorToRadiologyOrder(models.Model):
     encounter = models.ForeignKey('Encounter', on_delete=models.CASCADE, db_column='encounter_id', null=True, blank=True)
     doctor = models.ForeignKey('Doctor', on_delete=models.RESTRICT, db_column='doctor_id')
 
-class Meta:
+    class Meta:
         db_table = 'hospital"."doctor_to_radiology_orders'
 
 
@@ -540,18 +594,18 @@ class LabOrder(models.Model):
 
 class Questionnaire(models.Model):
     """문진표"""
-    
+
     class QStatus(models.TextChoices):
         NOT_STARTED = 'NOT_STARTED', '미작성'
         IN_PROGRESS = 'IN_PROGRESS', '작성중'
         COMPLETED = 'COMPLETED', '완료'
 
     questionnaire_id = models.AutoField(primary_key=True)
-    
+
     # 상태 및 데이터
     status = models.CharField(max_length=20, choices=QStatus.choices, default=QStatus.NOT_STARTED)
     data = models.JSONField(default=dict, blank=True)  # 질문-답변 데이터
-    
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -561,3 +615,47 @@ class Questionnaire(models.Model):
 
     class Meta:
         db_table = 'hospital"."questionnaires'
+
+
+class Announcement(models.Model):
+    """병원 내 공지사항"""
+
+    class AnnouncementType(models.TextChoices):
+        GENERAL = 'GENERAL', '일반'
+        URGENT = 'URGENT', '긴급'
+        EVENT = 'EVENT', '행사'
+        MAINTENANCE = 'MAINTENANCE', '시스템점검'
+
+    announcement_id = models.AutoField(primary_key=True)
+    title = models.CharField(max_length=200)
+    content = models.TextField()
+    announcement_type = models.CharField(
+        max_length=20,
+        choices=AnnouncementType.choices,
+        default=AnnouncementType.GENERAL
+    )
+    is_important = models.BooleanField(default=False)
+    is_active = models.BooleanField(default=True)
+    published_at = models.DateTimeField(blank=True, null=True)
+    expires_at = models.DateTimeField(blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    # Foreign Keys
+    author = models.ForeignKey(
+        'accounts.CustomUser',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        db_column='author_id',
+        related_name='announcements'
+    )
+
+    class Meta:
+        db_table = 'hospital"."announcements'
+        verbose_name = '공지사항'
+        verbose_name_plural = '공지사항'
+        ordering = ['-is_important', '-created_at']
+
+    def __str__(self):
+        return f"{self.title} ({self.get_announcement_type_display()})"

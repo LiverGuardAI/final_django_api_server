@@ -3,7 +3,7 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from accounts.permissions import IsClerk
-from doctor.models import Patient, Appointment, Encounter, LabOrder, VitalData, AnthropometricData, MedicalRecord
+from doctor.models import Patient, Appointment, Encounter, LabOrder, VitalData, AnthropometricData, MedicalRecord, Doctor
 from .serializers import (
     PatientSerializer,
     AppointmentSerializer,
@@ -11,14 +11,33 @@ from .serializers import (
     EncounterSerializer,
     EncounterCreateSerializer,
 )
-from django.db.models import Q, Count
+from django.db.models import Q, Count, Subquery, OuterRef
 from datetime import date, datetime
 from .cache_manager import cache_manager
 from django.db import transaction
 from channels.layers import get_channel_layer
 from asgiref.sync import async_to_sync
 from django.utils import timezone
+from accounts.models import DutySchedule
 
+
+
+
+def is_within_duty_schedule(doctor_id, appointment_date, appointment_time):
+    if not doctor_id:
+        return False
+    doctor = Doctor.objects.filter(doctor_id=doctor_id).select_related('user').first()
+    if not doctor:
+        return False
+    dt = datetime.combine(appointment_date, appointment_time)
+    if timezone.is_naive(dt):
+        dt = timezone.make_aware(dt, timezone.get_current_timezone())
+    return DutySchedule.objects.filter(
+        user_id=doctor.user_id,
+        schedule_status='CONFIRMED',
+        start_time__lt=dt,
+        end_time__gt=dt
+    ).exists()
 
 def send_queue_update_websocket(message="대기열이 업데이트되었습니다.", extra_data=None):
     """
@@ -76,7 +95,7 @@ class AdministrationDashboardView(APIView):
         return Response({
             'message': f'안녕하세요, {user.first_name} 원무과',
             'user': {
-                'id': user.id,
+                'id': user.user_id,
                 'username': user.username,
                 'role': user.role,
                 'first_name': user.first_name,
@@ -104,6 +123,18 @@ class PatientListView(APIView):
 
         # 환자 쿼리 (Patient 모델에는 doctor 필드가 없으므로 select_related 제거)
         patients = Patient.objects.all()
+
+        # 방문 횟수 및 최근 방문일 Annotate (N+1 방지)
+        # 1. 최근 방문일 (COMPLETED 상태인 최신 Encounter의 start_time)
+        last_visit_subquery = Encounter.objects.filter(
+            patient=OuterRef('pk'),
+            status=Encounter.Status.COMPLETED
+        ).order_by('-start_time').values('start_time')[:1]
+
+        patients = patients.annotate(
+            total_visits=Count('encounter', filter=Q(encounter__status=Encounter.Status.COMPLETED)),
+            last_visit=Subquery(last_visit_subquery)
+        )
 
         if search:
             # 커스텀 매니저 사용
@@ -151,6 +182,13 @@ class PatientDetailView(APIView):
             serializer = PatientSerializer(patient, data=request.data, partial=True)
 
             if serializer.is_valid():
+                doctor = serializer.validated_data.get('doctor', appointment.doctor)
+                appointment_date = serializer.validated_data.get('appointment_date', appointment.appointment_date)
+                appointment_time = serializer.validated_data.get('appointment_time', appointment.appointment_time)
+                if not doctor or not is_within_duty_schedule(doctor.doctor_id, appointment_date, appointment_time):
+                    return Response({
+                        'error': '\uD574\uB2F9 \uC2DC\uAC04\uC740 \uADFC\uBB34 \uC77C\uC815\uC774 \uC544\uB2D9\uB2C8\uB2E4.'
+                    }, status=status.HTTP_400_BAD_REQUEST)
                 serializer.save()
                 return Response({
                     'message': '환자 정보가 수정되었습니다.',
@@ -206,7 +244,7 @@ class PatientRegistrationView(APIView):
         serializer = PatientSerializer(data=data)
 
         if serializer.is_valid():
-            patient = serializer.save(staff=request.user)
+            patient = serializer.save()
             return Response({
                 'message': '환자 등록 완료',
                 'patient': PatientSerializer(patient).data
@@ -236,6 +274,14 @@ class AppointmentListView(APIView):
         if patient_id:
             appointments = appointments.filter(patient_id=patient_id)
 
+        doctor_id = request.query_params.get('doctor_id', None)
+        if doctor_id:
+            if str(doctor_id).lower() not in ['null', 'undefined', 'none']:
+                try:
+                    appointments = appointments.filter(doctor_id=int(doctor_id))
+                except (TypeError, ValueError):
+                    pass
+
         appointments = appointments.order_by('-appointment_date', '-appointment_time')
         serializer = AppointmentSerializer(appointments, many=True)
 
@@ -249,6 +295,13 @@ class AppointmentListView(APIView):
         serializer = AppointmentCreateSerializer(data=request.data)
 
         if serializer.is_valid():
+            doctor = serializer.validated_data.get('doctor')
+            appointment_date = serializer.validated_data.get('appointment_date')
+            appointment_time = serializer.validated_data.get('appointment_time')
+            if not doctor or not is_within_duty_schedule(doctor.doctor_id, appointment_date, appointment_time):
+                return Response({
+                    'error': '\uD574\uB2F9 \uC2DC\uAC04\uC740 \uADFC\uBB34 \uC77C\uC815\uC774 \uC544\uB2D9\uB2C8\uB2E4.'
+                }, status=status.HTTP_400_BAD_REQUEST)
             appointment = serializer.save()
             return Response({
                 'message': '예약이 등록되었습니다.',
@@ -318,6 +371,10 @@ class EncounterListView(APIView):
 
         if patient_id:
             encounters = encounters.filter(patient_id=patient_id)
+        
+        date_param = request.query_params.get('date', None)
+        if date_param:
+            encounters = encounters.filter(start_time__date=date_param)
 
         encounters = encounters.order_by('-start_time')
         serializer = EncounterSerializer(encounters, many=True)
@@ -576,7 +633,16 @@ class WaitingQueueView(APIView):
              updated_at__date=today
         )
 
-        queryset = Encounter.objects.filter(filter_condition).select_related('patient', 'assigned_doctor').order_by('state_entered_at')
+        # prefetch_related 추가 (Serializer N+1 방지)
+        queryset = Encounter.objects.filter(filter_condition)\
+            .select_related('patient', 'assigned_doctor')\
+            .prefetch_related(
+                'medical_records',          # MedicalRecord (related_name defined)
+                'laborder_set',             # LabOrder (Default: laborder_set)
+                'doctortoradiologyorder_set', # DoctorToRadiologyOrder (Default: doctortoradiologyorder_set)
+                'questionnaire'             # Questionnaire (1:1 related_name='questionnaire')
+            )\
+            .order_by('state_entered_at')
         
         if doctor_id:
              try:
@@ -592,7 +658,8 @@ class WaitingQueueView(APIView):
 
         # Redis에 5초간 캐싱
         import json
-        cache_manager.redis_client.setex(cache_key, 5, json.dumps(queue_data))
+        from django.core.serializers.json import DjangoJSONEncoder
+        cache_manager.redis_client.setex(cache_key, 5, json.dumps(queue_data, cls=DjangoJSONEncoder))
 
         return Response({
             'success': True,
@@ -609,12 +676,22 @@ class AdministrationWaitingQueueView(APIView):
 
     def get(self, request):
         view_type = request.query_params.get('type', 'clinic') # clinic | imaging
-        
+
         from django.db.models import Q
         from django.utils import timezone
-        
+        import json
+
         today = timezone.localdate()
-        
+
+        # Redis 캐시 키
+        cache_key = f'waiting_queue_list:{view_type}'
+
+        # 1. 캐시 확인 (5초 TTL)
+        cached_data = cache_manager.redis_client.get(cache_key)
+        if cached_data:
+            return Response(json.loads(cached_data), status=status.HTTP_200_OK)
+
+        # 2. 캐시 미스: DB 조회
         if view_type == 'clinic':
              # 진료 대기 현황: 진료대기, 진료중, 진료완료(오늘)
             filter_condition = Q(workflow_state__in=[
@@ -631,25 +708,46 @@ class AdministrationWaitingQueueView(APIView):
                 Encounter.WorkflowState.WAITING_IMAGING,
                 Encounter.WorkflowState.IN_IMAGING,
             ])
-            # 영상은 Encounter 상태만으로는 '완료'를 구분하기 어려울 수 있으나(검사완료 후 다시 진료대기로 가므로),
-            # 일단 대기/진행만 보여줌
         else:
             return Response({'error': 'Invalid view type'}, status=status.HTTP_400_BAD_REQUEST)
 
-        queryset = Encounter.objects.filter(filter_condition).select_related('patient', 'assigned_doctor').order_by('state_entered_at')
-        
+        queryset = Encounter.objects.filter(filter_condition)\
+            .select_related('patient', 'assigned_doctor')\
+            .prefetch_related(
+                'medical_records',
+                'laborder_set',
+                'doctortoradiologyorder_set',
+                'questionnaire'
+            )\
+            .order_by('state_entered_at')
+
         serializer = EncounterSerializer(queryset, many=True)
 
-        # 통계 정보 (원무과용이라도 전체 대기 수는 보여주는 게 좋음)
-        from .cache_manager import cache_manager
-        
-        return Response({
-            'success': True,
-            'stats': {
+        # 통계 정보
+        if view_type == 'clinic':
+            stats = {
                 'waiting': cache_manager.get_waiting_count('clinic'),
-            },
+                'in_progress': cache_manager.get_in_progress_count('clinic'),
+            }
+        else:  # imaging
+            stats = {
+                'waiting': cache_manager.get_waiting_count('imaging'),
+                'in_progress': cache_manager.get_in_progress_count('imaging'),
+            }
+
+        response_data = {
+            'success': True,
+            'stats': stats,
             'queue': serializer.data
-        }, status=status.HTTP_200_OK)
+        }
+
+        # 3. Redis 캐싱 (5초)
+        try:
+            cache_manager.redis_client.setex(cache_key, 5, json.dumps(response_data))
+        except Exception as e:
+            print(f"Cache write failed: {e}")
+
+        return Response(response_data, status=status.HTTP_200_OK)
 
 
 class CallNextPatientView(APIView):
@@ -919,48 +1017,164 @@ class ConfirmOrderView(APIView):
     permission_classes = [IsAuthenticated]
 
     def patch(self, request, order_id):
+        """
+        오더 접수 처리 - 새로운 로직:
+        1. 오더 상태만 변경 (LAB: IN_PROGRESS, IMAGING: WAITING)
+        2. 모든 오더가 접수 완료되었는지 확인
+        3. 모든 오더 접수 완료 시:
+           - CT 오더 있음 → WAITING_IMAGING (촬영 대기)
+           - CT 오더 없음 → WAITING_RESULTS (결과 대기, 환자 귀가)
+        """
         try:
-            order_type = request.data.get('order_type') # 'LAB' or 'IMAGING'
-            action = request.data.get('action') # 'CONFIRM' or 'CONFIRM_AND_DISCHARGE'
-            
+            order_type = request.data.get('order_type')  # 'LAB' or 'IMAGING'
+
             from doctor.models import LabOrder, DoctorToRadiologyOrder, Encounter
             from django.utils import timezone
 
-            encounter_to_close = None
+            encounter = None
 
+            # 1. 오더 상태 변경
             if order_type == 'LAB':
                 order = LabOrder.objects.get(order_id=order_id)
-                order.status = 'IN_PROGRESS' # 접수 완료 -> 검사 중
+                order.status = 'IN_PROGRESS'  # 접수 완료 -> 검사 중 (외부검사는 며칠 소요)
                 order.save()
-                encounter_to_close = order.encounter
-            
+                encounter = order.encounter
+
             elif order_type == 'IMAGING':
                 order = DoctorToRadiologyOrder.objects.get(order_id=order_id)
-                order.status = 'WAITING' # 접수 완료 -> 촬영 대기
+                order.status = 'WAITING'  # 접수 완료 -> 촬영 대기
                 order.save()
-                encounter_to_close = order.encounter
-            
+                encounter = order.encounter
+
             else:
                 return Response({'error': 'Invalid order type'}, status=status.HTTP_400_BAD_REQUEST)
 
-            # 단순 접수 (CONFIRM) 인 경우 -> 결과 대기 상태로 변경 (그래야 원무과 '추가진료' 탭에 뜸)
-            if action == 'CONFIRM' and encounter_to_close:
-                # 이미 완료된 상태가 아니라면 결과대기로 변경
-                if encounter_to_close.workflow_state != Encounter.WorkflowState.COMPLETED:
-                    encounter_to_close.workflow_state = Encounter.WorkflowState.WAITING_RESULTS
-                    encounter_to_close.save()
+            if not encounter or encounter.workflow_state == Encounter.WorkflowState.COMPLETED:
+                return Response({'message': '오더가 처리되었습니다.'}, status=status.HTTP_200_OK)
 
-            # 귀가 조치 로직 (CONFIRM_AND_DISCHARGE)
-            if action == 'CONFIRM_AND_DISCHARGE' and encounter_to_close:
-                encounter_to_close.workflow_state = Encounter.WorkflowState.COMPLETED
-                encounter_to_close.status = Encounter.Status.COMPLETED
-                encounter_to_close.end_time = timezone.now()
-                encounter_to_close.save()
+            # 2. 모든 오더 접수 완료 여부 확인
+            has_pending_lab = LabOrder.objects.filter(
+                encounter=encounter,
+                status='REQUESTED'
+            ).exists()
+
+            has_pending_imaging = DoctorToRadiologyOrder.objects.filter(
+                encounter=encounter,
+                status='REQUESTED'
+            ).exists()
+
+            # 아직 접수 안 된 오더가 있으면 REGISTERED 상태 유지
+            if has_pending_lab or has_pending_imaging:
+                print(f"INFO: 오더 접수했지만 다른 오더 대기 중: {encounter.encounter_id}")
+                return Response({'message': '오더가 처리되었습니다.'}, status=status.HTTP_200_OK)
+
+            # 3. 모든 오더 접수 완료 → 다음 단계로 전환
+            # 3-1. CT 오더가 있는지 확인
+            has_imaging_orders = DoctorToRadiologyOrder.objects.filter(
+                encounter=encounter,
+                status__in=['WAITING', 'IN_PROGRESS']
+            ).exists()
+
+            if has_imaging_orders:
+                # CT 오더 있음 → 촬영 대기로 전환
+                encounter.transition_to(Encounter.WorkflowState.WAITING_IMAGING)
+
+                # WebSocket 알림
+                send_queue_update_websocket(
+                    message=f"촬영 대기: {encounter.patient.name}",
+                    extra_data={
+                        "queue_type": "imaging",
+                        "imaging_waiting": cache_manager.get_waiting_count('imaging'),
+                        "imaging_in_progress": cache_manager.get_in_progress_count('imaging'),
+                    }
+                )
+                cache_manager.redis_client.delete('waiting_queue_list:imaging')
+                print(f"INFO: 모든 오더 접수 완료 → 촬영 대기: {encounter.encounter_id}")
+
+            else:
+                # CT 오더 없음 → 결과 대기 (환자 귀가)
+                encounter.transition_to(Encounter.WorkflowState.WAITING_RESULTS)
+                cache_manager.redis_client.delete('waiting_queue_list:clinic')
+                print(f"INFO: 모든 오더 접수 완료 → 결과 대기 (귀가): {encounter.encounter_id}")
 
             return Response({'message': '오더가 처리되었습니다.'}, status=status.HTTP_200_OK)
 
         except (LabOrder.DoesNotExist, DoctorToRadiologyOrder.DoesNotExist):
-             return Response({'error': '오더를 찾을 수 없습니다.'}, status=status.HTTP_404_NOT_FOUND)
+            return Response({'error': '오더를 찾을 수 없습니다.'}, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class AssignImagingDoctorView(APIView):
+    """
+    Imaging order assignment API (admin).
+    - validates radiologist id
+    - moves order to WAITING
+    - updates encounter workflow state when all orders are accepted
+    """
+    permission_classes = [IsAuthenticated]
+
+    def patch(self, request, order_id):
+        try:
+            order_type = request.data.get('order_type')
+            radiologist_id = request.data.get('doctor_id')
+
+            if order_type != 'IMAGING':
+                return Response({'error': 'Invalid order type'}, status=status.HTTP_400_BAD_REQUEST)
+            if not radiologist_id:
+                return Response({'error': 'doctor_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+            from doctor.models import LabOrder, DoctorToRadiologyOrder, Encounter
+            from radiology.models import Radiology
+
+            radiologist = Radiology.objects.filter(radiologic_id=radiologist_id).first()
+            if not radiologist:
+                return Response({'error': 'Radiologist not found'}, status=status.HTTP_404_NOT_FOUND)
+
+            order = DoctorToRadiologyOrder.objects.get(order_id=order_id)
+            order.status = 'WAITING'
+            order.save()
+
+            encounter = order.encounter
+            if not encounter or encounter.workflow_state == Encounter.WorkflowState.COMPLETED:
+                return Response({'message': 'Order assigned'}, status=status.HTTP_200_OK)
+
+            has_pending_lab = LabOrder.objects.filter(
+                encounter=encounter,
+                status='REQUESTED'
+            ).exists()
+            has_pending_imaging = DoctorToRadiologyOrder.objects.filter(
+                encounter=encounter,
+                status='REQUESTED'
+            ).exists()
+
+            if has_pending_lab or has_pending_imaging:
+                return Response({'message': 'Order assigned'}, status=status.HTTP_200_OK)
+
+            has_imaging_orders = DoctorToRadiologyOrder.objects.filter(
+                encounter=encounter,
+                status__in=['WAITING', 'IN_PROGRESS']
+            ).exists()
+
+            if has_imaging_orders:
+                encounter.transition_to(Encounter.WorkflowState.WAITING_IMAGING)
+                send_queue_update_websocket(
+                    message=f"Imaging waiting {encounter.patient.name}",
+                    extra_data={
+                        "queue_type": "imaging",
+                        "imaging_waiting": cache_manager.get_waiting_count('imaging'),
+                        "imaging_in_progress": cache_manager.get_in_progress_count('imaging'),
+                    }
+                )
+                cache_manager.redis_client.delete('waiting_queue_list:imaging')
+            else:
+                encounter.transition_to(Encounter.WorkflowState.WAITING_RESULTS)
+                cache_manager.redis_client.delete('waiting_queue_list:clinic')
+
+            return Response({'message': 'Order assigned'}, status=status.HTTP_200_OK)
+
+        except DoctorToRadiologyOrder.DoesNotExist:
+            return Response({'error': 'Order not found'}, status=status.HTTP_404_NOT_FOUND)
         except Exception as e:
             return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
@@ -983,7 +1197,15 @@ class CompleteVitalOrPhysicalView(APIView):
             encounter = order.encounter
             patient = order.patient
 
+            # [FIX] 유효성 검사 (권한 및 의사 배정 확인)
+            if not hasattr(request.user, 'administration'):
+                return Response({'error': '원무과 직원 계정으로만 처리가 가능합니다.'}, status=status.HTTP_403_FORBIDDEN)
+            
+            if not encounter.assigned_doctor:
+                return Response({'error': '담당 의사가 배정되지 않은 환자입니다. 의사를 배정해주세요.'}, status=status.HTTP_400_BAD_REQUEST)
+
             # MedicalRecord 생성 또는 가져오기
+            # staff 필드는 NOT NULL이므로 반드시 request.user.administration을 할당해야 함
             medical_record, created = MedicalRecord.objects.get_or_create(
                 encounter=encounter,
                 patient=patient,
@@ -991,7 +1213,7 @@ class CompleteVitalOrPhysicalView(APIView):
                     'record_date': timezone.now().date(),
                     'record_time': timezone.now().time(),
                     'doctor': encounter.assigned_doctor,
-                    'staff': request.user.administration if hasattr(request.user, 'administration') else None,
+                    'staff': request.user.administration,
                     'record_status': MedicalRecord.RecordStatus.DRAFT,
                 }
             )
@@ -1004,6 +1226,8 @@ class CompleteVitalOrPhysicalView(APIView):
                     measured_at=timezone.now().date(),
                     sbp=lab_data.get('systolic_bp'),
                     dbp=lab_data.get('diastolic_bp'),
+                    heart_rate=lab_data.get('heart_rate'),        # Added
+                    temperature=lab_data.get('body_temperature'), # Added
                 )
             
             elif order_type == 'PHYSICAL':
@@ -1017,9 +1241,49 @@ class CompleteVitalOrPhysicalView(APIView):
                     bmi=lab_data.get('bmi'),
                 )
 
-            # 오더 상태를 완료로 변경
             order.status = LabOrder.OrderStatus.COMPLETED
             order.save()
+
+            # **FIX**: LAB 오더 완료 후 encounter 상태 업데이트
+            # 1. 다른 LAB 오더가 남아있는지 확인
+            has_pending_lab = LabOrder.objects.filter(
+                encounter=encounter,
+                status__in=['REQUESTED', 'WAITING', 'IN_PROGRESS']
+            ).exists()
+
+            # 2. IMAGING 오더가 대기 중인지 확인
+            has_pending_imaging = DoctorToRadiologyOrder.objects.filter(
+                encounter=encounter,
+                status__in=['REQUESTED', 'WAITING', 'IN_PROGRESS']
+            ).exists()
+
+            if has_pending_lab:
+                # 다른 LAB 오더가 남아있으면 상태 유지
+                print(f"INFO: LAB 오더 완료했지만 다른 LAB 오더 대기 중: {encounter.encounter_id}")
+            elif has_pending_imaging:
+                # IMAGING 오더가 남아있으면 촬영 대기로 전환
+                if encounter.workflow_state not in [Encounter.WorkflowState.WAITING_IMAGING, Encounter.WorkflowState.IN_IMAGING]:
+                    encounter.transition_to(Encounter.WorkflowState.WAITING_IMAGING)
+                    print(f"INFO: LAB 완료 후 IMAGING 대기로 전환: {encounter.encounter_id}")
+
+                    # 캐시 무효화 및 WebSocket 알림
+                    cache_manager.redis_client.delete('waiting_queue_list:imaging')
+                    send_queue_update_websocket(
+                        message=f"LAB 완료 후 촬영 대기: {patient.name}",
+                        extra_data={
+                            "queue_type": "imaging",
+                            "imaging_waiting": cache_manager.get_waiting_count('imaging'),
+                            "imaging_in_progress": cache_manager.get_in_progress_count('imaging'),
+                        }
+                    )
+            else:
+                # 모든 오더 완료 → 결과 대기로 전환
+                if encounter.workflow_state != Encounter.WorkflowState.COMPLETED:
+                    encounter.transition_to(Encounter.WorkflowState.WAITING_RESULTS)
+                    print(f"INFO: 모든 오더 완료 → 결과대기: {encounter.encounter_id}")
+
+                    # 캐시 무효화
+                    cache_manager.redis_client.delete('waiting_queue_list:clinic')
 
             return Response({
                 'message': '검사 데이터가 저장되었습니다.',
@@ -1032,3 +1296,158 @@ class CompleteVitalOrPhysicalView(APIView):
         except Exception as e:
             return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+
+class CancelEncounterView(APIView):
+    """Encounter 취소 API"""
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, encounter_id):
+        try:
+            encounter = Encounter.objects.get(encounter_id=encounter_id)
+            
+            # 이미 완료/취소된 경우 체크
+            if encounter.workflow_state in [Encounter.WorkflowState.COMPLETED, Encounter.WorkflowState.CANCELLED]:
+                 return Response({
+                    'message': f'이미 {encounter.get_workflow_state_display()} 상태입니다.'
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            # 상태 변경
+            encounter.transition_to(Encounter.WorkflowState.CANCELLED)
+            
+            # Redis 대기열 갱신은 transition_to 내부에서 처리됨 (decrement waiting/in_progress)
+            # 안전을 위해 캐시 무효화
+            cache_manager.redis_client.delete('waiting_queue_list')
+            
+            # WebSocket 알림
+            send_queue_update_websocket(
+                message=f"진료 취소: {encounter.patient.name}",
+                extra_data={
+                    "cancelled_encounter": {
+                        "id": encounter.encounter_id,
+                        "patient_name": encounter.patient.name
+                    }
+                }
+            )
+
+            return Response({
+                'message': '진료가 취소되었습니다.',
+                'encounter': EncounterSerializer(encounter).data
+            }, status=status.HTTP_200_OK)
+
+        except Encounter.DoesNotExist:
+            return Response({'error': 'Encounter not found'}, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+class DailyPatientStatusView(APIView):
+    """오늘의 환자 현황판을 위한 최적화된 API"""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        today = timezone.now().date()
+        
+        # 기본 쿼리셋 (오늘 데이터만, 시간순 정렬)
+        queryset = Encounter.objects.filter(start_time__date=today).select_related(
+            'patient', 'assigned_doctor'
+        ).order_by('-state_entered_at')
+
+        # 1. 통계 집계 (DB 레벨 계산)
+        stats = queryset.aggregate(
+            total=Count('encounter_id'),
+            waiting=Count('encounter_id', filter=Q(workflow_state__in=[
+                Encounter.WorkflowState.REGISTERED, 
+                Encounter.WorkflowState.WAITING_CLINIC
+            ])),
+            in_progress=Count('encounter_id', filter=Q(workflow_state__in=[
+                Encounter.WorkflowState.IN_CLINIC,
+                Encounter.WorkflowState.WAITING_IMAGING,
+                Encounter.WorkflowState.IN_IMAGING,
+                Encounter.WorkflowState.WAITING_RESULTS,
+                Encounter.WorkflowState.WAITING_PAYMENT
+            ])),
+            completed=Count('encounter_id', filter=Q(workflow_state=Encounter.WorkflowState.COMPLETED))
+        )
+
+        results = []
+        for enc in queryset:
+            doctor_name = enc.assigned_doctor.name if enc.assigned_doctor else None
+            
+            results.append({
+                'encounter_id': enc.encounter_id,
+                'patient_name': enc.patient.name,
+                'patient_id': enc.patient.patient_id,
+                'gender': enc.patient.gender,
+                'age': enc.patient.age,
+                'doctor_name': doctor_name,
+                'workflow_state': enc.workflow_state,
+                'state_entered_at': enc.state_entered_at,
+                'start_time': enc.start_time,
+                'end_time': enc.end_time or enc.updated_at,
+                'updated_at': enc.updated_at,
+            })
+
+        return Response({
+            'stats': stats,
+            'encounters': results
+        }, status=status.HTTP_200_OK)
+
+
+class AdministrationInfoView(APIView):
+    """현재 로그인한 원무과 직원 정보 조회/수정 API"""
+    permission_classes = [IsClerk]
+
+    def get(self, request):
+        """
+        현재 로그인한 원무과 직원의 상세 정보 조회
+        """
+        try:
+            from .models import Administration
+            from .serializers import AdministrationSerializer
+
+            admin_staff = Administration.objects.select_related('department').get(user=request.user)
+            serializer = AdministrationSerializer(admin_staff)
+            return Response(serializer.data, status=status.HTTP_200_OK)
+
+        except Administration.DoesNotExist:
+            return Response({
+                'error': '원무과 직원 정보를 찾을 수 없습니다.'
+            }, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            return Response({
+                'error': str(e)
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    def patch(self, request):
+        """
+        현재 로그인한 원무과 직원의 정보 수정
+        """
+        try:
+            from .models import Administration
+            from .serializers import AdministrationSerializer
+
+            admin_staff = Administration.objects.select_related('department').get(user=request.user)
+
+            # 수정 가능한 필드들
+            allowed_fields = ['name', 'phone']
+
+            # date_of_birth는 별도 처리 (날짜 형식 검증)
+            if 'date_of_birth' in request.data and request.data['date_of_birth']:
+                admin_staff.date_of_birth = request.data['date_of_birth']
+
+            for field in allowed_fields:
+                if field in request.data:
+                    setattr(admin_staff, field, request.data[field])
+
+            admin_staff.save()
+
+            serializer = AdministrationSerializer(admin_staff)
+            return Response(serializer.data, status=status.HTTP_200_OK)
+
+        except Administration.DoesNotExist:
+            return Response({
+                'error': '원무과 직원 정보를 찾을 수 없습니다.'
+            }, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            return Response({
+                'error': str(e)
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

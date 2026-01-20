@@ -1,7 +1,7 @@
 # radiology/serializers.py
 from rest_framework import serializers
 from doctor.models import Patient, DoctorToRadiologyOrder, Encounter
-from .models import DICOMStudy
+from .models import DICOMStudy, CTReport
 
 
 class PatientWaitlistSerializer(serializers.ModelSerializer):
@@ -69,3 +69,16 @@ class RadiologyQueueSerializer(serializers.ModelSerializer):
             'ordered_at',
             'study_uid',
         ]
+
+
+class CTReportSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = CTReport
+        fields = [
+            'report_id',
+            'series_instance_uid',
+            'report_text',
+            'created_at',
+            'updated_at',
+        ]
+        read_only_fields = ['report_id', 'created_at', 'updated_at']

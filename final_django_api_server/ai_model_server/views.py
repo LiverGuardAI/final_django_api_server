@@ -6,6 +6,8 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import AllowAny, IsAuthenticated
+from services.report_llm import generate_tumor_analysis_report, generate_clinical_note_suggestion
+from services.report_lmstudio import generate_lmstudio_report
 
 # 기존 팀원분이 만든 Celery Task 임포트
 from .tasks import (
@@ -421,3 +423,51 @@ class DDIAnalysisView(APIView):
             return Response({"error": "분석 시간이 초과되었습니다."}, status=504)
         except Exception as e:
             return Response({"error": f"서버 내부 오류: {str(e)}"}, status=500)
+        
+        
+class ReportGenerateView(APIView):
+    def post(self, request):
+        findings = request.data  # 또는 DB에서 불러온 findings_json
+        report_text = generate_tumor_analysis_report(findings)
+        return Response({"report": report_text})
+
+
+class LMStudioReportGenerateView(APIView):
+    def post(self, request):
+        payload = request.data if isinstance(request.data, dict) else {}
+        content = payload.get("content") if isinstance(payload.get("content"), str) else None
+        system_content = (
+            payload.get("system_content") if isinstance(payload.get("system_content"), str) else None
+        )
+        model = payload.get("model") if isinstance(payload.get("model"), str) else None
+        try:
+            report_text = generate_lmstudio_report(
+                payload,
+                content=content,
+                system_content=system_content,
+                model=model,
+            )
+            return Response({"report": report_text})
+        except ValueError as exc:
+            return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        except requests.exceptions.RequestException as exc:
+            return Response(
+                {"error": "LLM 서버 요청에 실패했습니다.", "details": str(exc)},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+        except Exception as exc:
+            return Response({"error": f"서버 내부 오류: {str(exc)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+class ClinicalNoteGenerateView(APIView):
+    def post(self, request):
+        payload = request.data if isinstance(request.data, dict) else {}
+        if not payload:
+            return Response({"error": "payload is required"}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            suggestion = generate_clinical_note_suggestion(payload)
+            return Response({"suggestion": suggestion})
+        except ValueError as exc:
+            return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as exc:
+            return Response({"error": f"Server error: {str(exc)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+

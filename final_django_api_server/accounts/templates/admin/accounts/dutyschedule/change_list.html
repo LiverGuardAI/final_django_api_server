@@ -1,0 +1,951 @@
+{% extends "admin/change_list.html" %}
+{% load static %}
+
+{% block extrahead %}
+{{ block.super }}
+<style>
+    /* Layout */
+    .scheduler-main {
+        display: flex;
+        flex-direction: column;
+        gap: 15px;
+        margin-top: 20px;
+    }
+
+    .scheduler-controls {
+        display: flex;
+        align-items: center;
+        gap: 15px;
+        padding: 10px;
+        background: #fff;
+        border: 1px solid #ddd;
+        border-radius: 5px;
+    }
+
+    .scheduler-container {
+        display: flex;
+        gap: 20px;
+        height: 800px;
+    }
+
+    /* Sidebar */
+    .staff-sidebar {
+        width: 250px;
+        background: #f8f9fa;
+        border: 1px solid #ddd;
+        border-radius: 5px;
+        padding: 10px;
+        overflow-y: auto;
+    }
+
+    .staff-card {
+        background: white;
+        border: 1px solid #ccc;
+        border-radius: 4px;
+        padding: 8px;
+        margin-bottom: 6px;
+        cursor: grab;
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+        font-size: 0.9em;
+    }
+
+    .staff-card:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    }
+
+    .staff-card.doctor {
+        border-left: 4px solid #4299e1;
+    }
+
+    .staff-card.radiologist {
+        border-left: 4px solid #ed8936;
+    }
+
+    .staff-card.clerk {
+        border-left: 4px solid #48bb78;
+    }
+
+    /* Timetable */
+    .timetable-wrapper {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        border: 1px solid #ddd;
+        border-radius: 5px;
+        background: white;
+        overflow: hidden;
+    }
+
+    .timetable-header {
+        display: grid;
+        grid-template-columns: 60px repeat(7, 1fr);
+        background: #f1f3f5;
+        border-bottom: 2px solid #ddd;
+        font-weight: bold;
+        text-align: center;
+    }
+
+    .header-cell {
+        padding: 10px;
+        border-right: 1px solid #eee;
+    }
+
+    .timetable-body {
+        flex: 1;
+        overflow-y: auto;
+        display: grid;
+        grid-template-columns: 60px repeat(7, 1fr);
+        grid-template-rows: repeat(14, 60px);
+        /* 08:00 - 22:00 */
+    }
+
+    .time-label {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border-right: 2px solid #ddd;
+        border-bottom: 1px solid #eee;
+        background: #f8f9fa;
+        font-size: 0.8em;
+    }
+
+    .time-slot {
+        border-right: 1px solid #eee;
+        border-bottom: 1px solid #eee;
+        position: relative;
+        transition: background 0.1s;
+    }
+
+    .time-slot:hover {
+        background-color: #f7fafc;
+    }
+
+    .time-slot.drag-over {
+        background-color: #ebf8ff;
+        border: 2px dashed #3182ce;
+    }
+
+    /* Schedule Items */
+    .schedule-item {
+        background: #4a5568;
+        color: white;
+        border-radius: 3px;
+        padding: 2px 4px;
+        font-size: 10px;
+        margin: 1px;
+        cursor: pointer;
+        overflow: hidden;
+        white-space: nowrap;
+        text-overflow: ellipsis;
+    }
+
+    .schedule-item:hover {
+        opacity: 0.9;
+    }
+
+    .schedule-item.pending {
+        background: repeating-linear-gradient(45deg,
+                #cbd5e0,
+                #cbd5e0 10px,
+                #e2e8f0 10px,
+                #e2e8f0 20px);
+        color: #2d3748;
+        border: 1px solid #a0aec0;
+    }
+
+    .schedule-item.confirmed {
+        background: #48bb78;
+    }
+
+    .schedule-item.cancelled {
+        background: #fc8181;
+    }
+
+    /* Buttons */
+    .btn {
+        padding: 8px 16px;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+        font-weight: bold;
+    }
+
+    .btn-nav {
+        background: #edf2f7;
+        color: #4a5568;
+    }
+
+    .btn-nav:hover {
+        background: #e2e8f0;
+    }
+
+    .btn-primary {
+        background: #3182ce;
+        color: white;
+    }
+
+    .btn-primary:hover {
+        background: #2b6cb0;
+    }
+
+    .btn-danger {
+        background: #e53e3e;
+        color: white;
+    }
+
+    /* Modal */
+    .modal-overlay {
+        display: none;
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.5);
+        z-index: 9999;
+        align-items: center;
+        justify-content: center;
+    }
+
+    .modal-content {
+        background: white;
+        padding: 24px;
+        border-radius: 8px;
+        width: 700px;
+        box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+    }
+
+    .form-group {
+        margin-bottom: 12px;
+    }
+
+    .form-group label {
+        display: block;
+        margin-bottom: 4px;
+        font-weight: 600;
+        font-size: 0.9em;
+    }
+
+    .form-control {
+        width: 100%;
+        padding: 8px;
+        border: 1px solid #e2e8f0;
+        border-radius: 4px;
+        height: auto;
+        min-height: 38px;
+        box-sizing: border-box;
+        line-height: 1.5;
+    }
+
+    .checkbox-group {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+    }
+
+    .checkbox-item {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        font-size: 0.9em;
+    }
+
+    .modal-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 10px;
+        margin-top: 20px;
+    }
+</style>
+
+<script>
+    document.addEventListener('DOMContentLoaded', function () {
+        // --- State ---
+        let currentDate = new Date(); // Tracks the Monday of the visible week
+        let allStaff = [];
+        let fetchedSchedules = [];
+        let stagedSchedules = []; // Local state for new schedules
+
+        // --- DOM Elements ---
+        const els = {
+            weekRange: document.getElementById('weekRange'),
+            btnPrev: document.getElementById('btnPrev'),
+            btnNext: document.getElementById('btnNext'),
+            btnToday: document.getElementById('btnToday'),
+            btnBulk: document.getElementById('btnBulk'),
+            btnSaveAll: document.getElementById('btnSaveAll'), // New Button
+            staffList: document.getElementById('staffList'),
+            timetableHeader: document.getElementById('timetableHeader'),
+            timetableBody: document.getElementById('timetableBody'),
+            // Modals
+            singleModal: document.getElementById('singleModal'),
+            bulkModal: document.getElementById('bulkModal'),
+            editModal: document.getElementById('editModal'),
+        };
+
+        // --- Init ---
+        // Ensure currentDate is initialized to this week's Monday
+        currentDate = getMonday(new Date());
+
+        init();
+
+        async function init() {
+            renderTimetableStructure();
+            updateHeader();
+            await fetchStaff();
+            await fetchSchedules();
+            bindEvents();
+        }
+
+        function bindEvents() {
+            els.btnPrev.onclick = () => changeWeek(-1);
+            els.btnNext.onclick = () => changeWeek(1);
+            els.btnToday.onclick = () => { currentDate = getMonday(new Date()); init(); };
+            els.btnBulk.onclick = openBulkModal;
+
+            // New Save All
+            if (els.btnSaveAll) {
+                els.btnSaveAll.onclick = handleSaveAll;
+            } else {
+                // Create if not exists in HTML yet (simulated here or added in HTML later)
+                const container = document.querySelector('.scheduler-controls');
+                const btn = document.createElement('button');
+                btn.id = 'btnSaveAll';
+                btn.className = 'btn btn-primary';
+                btn.style.marginLeft = '10px';
+                btn.style.background = '#2b6cb0';
+                btn.innerHTML = '생성된 스케줄 저장 (Save All)';
+                btn.onclick = handleSaveAll;
+                container.appendChild(btn);
+                els.btnSaveAll = btn;
+            }
+
+            // Modal Cancel Buttons
+            document.querySelectorAll('.btn-cancel').forEach(btn => {
+                btn.onclick = () => {
+                    els.singleModal.style.display = 'none';
+                    els.bulkModal.style.display = 'none';
+                    els.editModal.style.display = 'none';
+                };
+            });
+        }
+
+        // --- Logic: Navigation ---
+        function changeWeek(offset) {
+            currentDate.setDate(currentDate.getDate() + (offset * 7));
+            updateHeader();
+            fetchSchedules();
+            refreshHeaderDates();
+        }
+
+        function updateHeader() {
+            const end = new Date(currentDate);
+            end.setDate(end.getDate() + 6);
+
+            const fmt = d => `${d.getFullYear()}.${d.getMonth() + 1}.${d.getDate()}`;
+            els.weekRange.textContent = `${fmt(currentDate)} - ${fmt(end)}`;
+        }
+
+        function refreshHeaderDates() {
+            const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+            const headerCells = document.querySelectorAll('.header-day-label');
+            headerCells.forEach((cell, i) => {
+                const d = new Date(currentDate);
+                d.setDate(d.getDate() + i);
+                cell.textContent = `${days[i]} (${d.getMonth() + 1}/${d.getDate()})`;
+            });
+        }
+
+        // --- Logic: API ---
+        async function fetchStaff() {
+            try {
+                const res = await fetch('/api/auth/staff/', { credentials: 'include' });
+                allStaff = await res.json();
+                renderStaffList(allStaff);
+                populateBulkStaffSelect(allStaff);
+            } catch (e) { console.error(e); }
+        }
+
+        async function fetchSchedules() {
+            const start = toYMD(currentDate);
+            const end = toYMD(addDays(currentDate, 6)); // Inclusive
+
+            try {
+                // Use Admin endpoint via Router: GET /api/auth/schedules/
+                const res = await fetch(`/api/auth/schedules/?start_date=${start}&end_date=${end}`, { credentials: 'include' });
+                fetchedSchedules = await res.json();
+                renderAllSchedules(); // Render both fetched and staged
+            } catch (e) { console.error(e); }
+        }
+
+        // --- Logic: Render ---
+        function renderStaffList(staff) {
+            const grouped = {};
+            staff.forEach(s => {
+                const dept = s.dept_name || '기타';
+                if (!grouped[dept]) grouped[dept] = [];
+                grouped[dept].push(s);
+            });
+
+            let html = '';
+            for (const [dept, list] of Object.entries(grouped)) {
+                html += `<div style="margin-bottom:15px">`;
+                html += `<h4 style="margin:5px 0; border-bottom:1px solid #ddd; font-size:0.9em; color:#555;">${dept}</h4>`;
+                html += list.map(s => `
+                    <div class="staff-card ${s.role.toLowerCase()}" draggable="true" data-staff='${JSON.stringify(s)}'>
+                        <strong>${s.name}</strong> 
+                        <span style="font-size:0.8em; color:#666">(${s.role})</span>
+                    </div>
+                `).join('');
+                html += `</div>`;
+            }
+            els.staffList.innerHTML = html;
+
+            // Re-bind Drag
+            document.querySelectorAll('.staff-card').forEach(card => {
+                card.addEventListener('dragstart', handleDragStart);
+            });
+        }
+
+        function renderTimetableStructure() {
+            const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+            const hours = Array.from({ length: 15 }, (_, i) => i + 8); // 08:00 - 22:00
+
+            // Header
+            let headerHtml = `<div class="header-cell">Time</div>`;
+            headerHtml += days.map(d => `<div class="header-cell header-day-label">${d}</div>`).join('');
+            els.timetableHeader.innerHTML = headerHtml;
+            refreshHeaderDates();
+
+            // Body
+            let bodyHtml = hours.map(h => {
+                let row = `<div class="time-label">${h}:00</div>`;
+                row += days.map((_, i) => `
+                    <div class="time-slot" data-day="${i}" data-hour="${h}"></div>
+                `).join('');
+                return row;
+            }).join('');
+            els.timetableBody.innerHTML = bodyHtml;
+
+            // Bind Drop
+            document.querySelectorAll('.time-slot').forEach(slot => {
+                slot.ondragover = e => { e.preventDefault(); slot.classList.add('drag-over'); };
+                slot.ondragleave = e => slot.classList.remove('drag-over');
+                slot.ondrop = handleDrop;
+            });
+        }
+
+        function renderAllSchedules() {
+            // Clear items
+            document.querySelectorAll('.schedule-item').forEach(el => el.remove());
+
+            // 1. Render Fetched (Confirmed/Pending from DB)
+            fetchedSchedules.forEach(sch => renderSingleSchedule(sch, false));
+
+            // 2. Render Staged (Local, not saved yet)
+            stagedSchedules.forEach(sch => {
+                // Only render if it falls in current week view (optimization)
+                // renderSingleSchedule will handle boundary checks but good to know
+                renderSingleSchedule(sch, true);
+            });
+        }
+
+        function renderSingleSchedule(sch, isStaged) {
+            const start = new Date(sch.start_time);
+            const end = new Date(sch.end_time);
+
+            // Calculate start position relative to Monday 00:00
+            // We need to iterate through every hour slot this schedule covers
+
+            // Loop from start hour to end hour
+            // Note: Simplification - assume schedules don't span multiple days for rendering in this view logic easily
+            // Logic: find covered slots and append item to EACH slot.
+
+            let current = new Date(start);
+            // Snap to hour
+            current.setMinutes(0, 0, 0);
+
+            while (current < end) {
+                const diffTime = current.getTime() - currentDate.getTime();
+                const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
+                const hour = current.getHours();
+
+                if (diffDays >= 0 && diffDays <= 6 && hour >= 8 && hour <= 22) {
+                    const slot = document.querySelector(`.time-slot[data-day="${diffDays}"][data-hour="${hour}"]`);
+                    if (slot) {
+                        const el = document.createElement('div');
+                        const statusClass = isStaged ? 'staged' : sch.schedule_status.toLowerCase();
+                        el.className = `schedule-item ${statusClass}`;
+
+                        // Style for Staged
+                        if (isStaged) {
+                            el.style.border = '2px dashed #3182ce';
+                            el.style.backgroundColor = '#ebf8ff';
+                            el.style.color = '#2d3748';
+                        }
+
+                        // Display: Name
+                        // Only show text in the first slot or if it's a long schedule?
+                        // For now show in all for clarity, or better: name in 1st, arrow in others?
+                        // Let's show Name in all for simplicity requested by user "fill all slots".
+                        const displayText = `${sch.user_name}`;
+                        el.innerText = displayText;
+                        el.title = `${displayText}\n${getTimeStr(sch.start_time)} - ${getTimeStr(sch.end_time)}\nStatus: ${isStaged ? 'Staged' : sch.schedule_status}`;
+
+                        if (!isStaged) {
+                            el.onclick = (e) => {
+                                e.stopPropagation();
+                                openEditModal(sch);
+                            };
+                        } else {
+                            // Click to remove staged?
+                            el.onclick = (e) => {
+                                e.stopPropagation();
+                                if (confirm('이 임시 배정을 취소하시겠습니까?')) {
+                                    stagedSchedules = stagedSchedules.filter(s => s !== sch);
+                                    renderAllSchedules();
+                                }
+                            };
+                        }
+                        slot.appendChild(el);
+                    }
+                }
+                // Next hour
+                current.setHours(current.getHours() + 1);
+            }
+        }
+
+        // --- Drag & Drop ---
+        let stateDraggedStaff = null;
+        function handleDragStart(e) {
+            stateDraggedStaff = JSON.parse(this.dataset.staff);
+            e.dataTransfer.effectAllowed = 'copy';
+        }
+
+        function handleDrop(e) {
+            e.preventDefault();
+            this.classList.remove('drag-over');
+            if (!stateDraggedStaff) return;
+
+            const dayIdx = parseInt(this.dataset.day);
+            const hour = parseInt(this.dataset.hour);
+
+            // Calculate Target Date
+            const targetDate = new Date(currentDate);
+            targetDate.setDate(targetDate.getDate() + dayIdx);
+            targetDate.setHours(hour, 0, 0, 0);
+
+            openSingleModal(stateDraggedStaff, targetDate);
+            stateDraggedStaff = null;
+        }
+
+        // --- Modals ---
+        // 1. Single Create Modal (Now Staging)
+        function openSingleModal(staff, date) {
+            document.getElementById('s_staffName').innerText = staff.name;
+            document.getElementById('s_userId').value = staff.user_id;
+
+            // Adjust to KST/Local ISO
+            const startStr = dateToStringLocal(date);
+            const end = new Date(date);
+            end.setHours(end.getHours() + 9); // Default 09:00 - 18:00 (9 hours)
+            const endStr = dateToStringLocal(end);
+
+            document.getElementById('s_start').value = startStr;
+            document.getElementById('s_end').value = endStr;
+
+            els.singleModal.style.display = 'flex';
+        }
+
+        document.getElementById('btnSingleSubmit').onclick = () => {
+            // Instead of API, add to Staged
+            const staffName = document.getElementById('s_staffName').innerText;
+            const userId = document.getElementById('s_userId').value;
+            const start = new Date(document.getElementById('s_start').value);
+            const end = new Date(document.getElementById('s_end').value);
+            const shift = document.getElementById('s_shift').value;
+
+            const newSch = {
+                id: 'staged_' + Date.now(), // temp id
+                user_id: userId,
+                user_name: staffName,
+                start_time: toISOWithOffset(start),
+                end_time: toISOWithOffset(end),
+                shift_type: shift,
+                schedule_status: 'PENDING',
+                is_staged: true
+            };
+
+            stagedSchedules.push(newSch);
+            els.singleModal.style.display = 'none';
+            renderAllSchedules();
+        };
+
+        // --- Save All Handler ---
+        async function handleSaveAll() {
+            if (stagedSchedules.length === 0) {
+                alert('저장할 대기중인 스케줄이 없습니다.');
+                return;
+            }
+            if (!confirm(`${stagedSchedules.length}건의 스케줄을 저장하시겠습니까?`)) return;
+
+            // Loop create
+            let successCount = 0;
+            let errors = 0;
+
+            for (const sch of stagedSchedules) {
+                try {
+                    const payload = {
+                        user: sch.user_id, // Sending as 'user' (safe bet)
+                        start_time: sch.start_time, // Now has Offset
+                        end_time: sch.end_time,     // Now has Offset
+                        shift_type: sch.shift_type,
+                        schedule_status: 'PENDING',
+                        work_role: 'DOCTOR'
+                    };
+
+                    await createSchedule(payload);
+                    successCount++;
+                } catch (e) {
+                    console.error(e);
+                    errors++;
+                }
+            }
+
+            alert(`저장 완료: ${successCount}건 (실패: ${errors}건)`);
+            stagedSchedules = []; // Clear staged
+            fetchSchedules(); // Refresh from DB
+        }
+
+
+        // 2. Bulk Modal
+        function openBulkModal() {
+            // Set default dates: Monday to Sunday of current week
+            document.getElementById('b_start').value = toYMD(currentDate);
+            document.getElementById('b_end').value = toYMD(addDays(currentDate, 6));
+            els.bulkModal.style.display = 'flex';
+        }
+
+        function populateBulkStaffSelect(staff) {
+            const sel = document.getElementById('b_staffSelect');
+            sel.innerHTML = staff.map(s => `<option value="${s.user_id}">${s.name} (${s.role})</option>`).join('');
+        }
+
+        document.getElementById('btnBulkSubmit').onclick = async () => {
+            const userId = document.getElementById('b_staffSelect').value;
+            const start = document.getElementById('b_start').value;
+            const end = document.getElementById('b_end').value;
+            const shiftType = document.querySelector('input[name="b_shift"]:checked').value;
+
+            // Off Days
+            const offDays = [];
+            document.querySelectorAll('.off-day-check:checked').forEach(cb => offDays.push(cb.value));
+
+            const payload = {
+                user_id: userId,
+                start_date: start,
+                end_date: end,
+                off_days: offDays,
+                shift_type: shiftType
+            };
+
+            try {
+                const res = await fetch('/api/auth/schedules/bulk/', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRFToken': getCookie('csrftoken')
+                    },
+                    credentials: 'include',
+                    body: JSON.stringify(payload)
+                });
+                if (res.ok) {
+                    alert('일괄 일정이 생성되었습니다.');
+                    els.bulkModal.style.display = 'none';
+                    fetchSchedules();
+                } else {
+                    alert('생성 실패');
+                }
+            } catch (e) { console.error(e); }
+        };
+
+        // 3. Edit/Delete Modal
+        function openEditModal(sch) {
+            document.getElementById('e_id').value = sch.schedule_id;
+            document.getElementById('e_title').innerText = `${sch.user_name} (${sch.employee_no || ''})`;
+            document.getElementById('e_start').value = dateToStringLocal(new Date(sch.start_time));
+            document.getElementById('e_end').value = dateToStringLocal(new Date(sch.end_time));
+            document.getElementById('e_status').value = sch.schedule_status;
+
+            const reasonGroup = document.getElementById('e_reason_group');
+            const reasonDiv = document.getElementById('e_reason');
+            if (sch.schedule_status === 'CANCELLED' && sch.rejection_reason) {
+                reasonDiv.innerText = sch.rejection_reason;
+                reasonGroup.style.display = 'block';
+            } else {
+                reasonGroup.style.display = 'none';
+            }
+
+            els.editModal.style.display = 'flex';
+        }
+
+        document.getElementById('btnEditDelete').onclick = async () => {
+            if (!confirm('정말 삭제하시겠습니까?')) return;
+            const id = document.getElementById('e_id').value;
+            await deleteSchedule(id);
+            els.editModal.style.display = 'none';
+            fetchSchedules();
+        };
+
+        document.getElementById('btnEditSave').onclick = async () => {
+            const id = document.getElementById('e_id').value;
+            const data = {
+                start_time: toISOWithOffset(new Date(document.getElementById('e_start').value)),
+                end_time: toISOWithOffset(new Date(document.getElementById('e_end').value)),
+                schedule_status: document.getElementById('e_status').value
+            };
+            await updateSchedule(id, data);
+            els.editModal.style.display = 'none';
+            fetchSchedules();
+        };
+
+
+        // --- Helpers ---
+        function toISOWithOffset(date) {
+            const tzo = -date.getTimezoneOffset(),
+                dif = tzo >= 0 ? '+' : '-',
+                pad = function (num) {
+                    const norm = Math.floor(Math.abs(num));
+                    return (norm < 10 ? '0' : '') + norm;
+                };
+
+            return date.getFullYear() +
+                '-' + pad(date.getMonth() + 1) +
+                '-' + pad(date.getDate()) +
+                'T' + pad(date.getHours()) +
+                ':' + pad(date.getMinutes()) +
+                ':' + pad(date.getSeconds()) +
+                dif + pad(tzo / 60) + ':' + pad(tzo % 60);
+        }
+
+        async function createSchedule(data) {
+            // Fetch CSRF
+            return fetch('/api/auth/schedules/', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCookie('csrftoken') },
+                body: JSON.stringify(data),
+                credentials: 'include'
+            });
+        }
+        async function updateSchedule(id, data) {
+            return fetch(`/api/auth/schedules/${id}/`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCookie('csrftoken') },
+                body: JSON.stringify(data),
+                credentials: 'include'
+            });
+        }
+        async function deleteSchedule(id) {
+            return fetch(`/api/auth/schedules/${id}/`, {
+                method: 'DELETE',
+                headers: { 'X-CSRFToken': getCookie('csrftoken') },
+                credentials: 'include'
+            });
+        }
+
+        function getMonday(d) {
+            d = new Date(d);
+            const day = d.getDay(),
+                diff = d.getDate() - day + (day == 0 ? -6 : 1);
+            const newDate = new Date(d.setDate(diff));
+            newDate.setHours(0, 0, 0, 0); // Normalize to midnight
+            return newDate;
+        }
+        function addDays(d, n) {
+            const r = new Date(d); r.setDate(r.getDate() + n); return r;
+        }
+        function toYMD(d) {
+            const offset = d.getTimezoneOffset() * 60000;
+            return new Date(d.getTime() - offset).toISOString().split('T')[0];
+        }
+        function dateToStringLocal(d) {
+            const offset = d.getTimezoneOffset() * 60000;
+            return new Date(d.getTime() - offset).toISOString().slice(0, 16); // YYYY-MM-DDTHH:mm
+        }
+        function getTimeStr(iso) {
+            return new Date(iso).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', hour12: false });
+        }
+        function getCookie(name) {
+            let cookieValue = null;
+            if (document.cookie && document.cookie !== '') {
+                const cookies = document.cookie.split(';');
+                for (let i = 0; i < cookies.length; i++) {
+                    const cookie = cookies[i].trim();
+                    if (cookie.substring(0, name.length + 1) === (name + '=')) {
+                        cookieValue = decodeURIComponent(cookie.substring(name.length + 1));
+                        break;
+                    }
+                }
+            }
+            return cookieValue;
+        }
+    });
+</script>
+{% endblock %}
+
+{% block content %}
+<div id="content-main">
+    <h1>근무 일정 관리 (Draggable)</h1>
+
+    <div class="scheduler-main">
+        <!-- Controls -->
+        <div class="scheduler-controls">
+            <button id="btnPrev" class="btn btn-nav">&lt; 이전 주</button>
+            <span id="weekRange" style="font-weight:bold; font-size:1.1em; min-width:200px; text-align:center;"></span>
+            <button id="btnNext" class="btn btn-nav">다음 주 &gt;</button>
+            <button id="btnToday" class="btn btn-nav">오늘</button>
+
+            <div style="flex:1"></div>
+
+            <button id="btnBulk" class="btn btn-primary" style="background:#6b46c1;">일괄 등록 (Bulk Create)</button>
+        </div>
+
+        <!-- Layout -->
+        <div class="scheduler-container">
+            <!-- Sidebar -->
+            <div class="staff-sidebar">
+                <h3 style="margin-top:0; border-bottom:1px solid #ddd; padding-bottom:10px;">직원 목록</h3>
+                <div id="staffList">Loading...</div>
+            </div>
+
+            <!-- Timetable -->
+            <div class="timetable-wrapper">
+                <div id="timetableHeader" class="timetable-header"></div>
+                <div id="timetableBody" class="timetable-body"></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 1. Single Drop Modal -->
+<div id="singleModal" class="modal-overlay">
+    <div class="modal-content">
+        <h3>일정 생성</h3>
+        <input type="hidden" id="s_userId">
+
+        <div class="form-group">
+            <label>직원</label>
+            <div id="s_staffName"></div>
+        </div>
+        <div class="form-group">
+            <label>시작</label>
+            <input type="datetime-local" id="s_start" class="form-control">
+        </div>
+        <div class="form-group">
+            <label>종료</label>
+            <input type="datetime-local" id="s_end" class="form-control">
+        </div>
+        <div class="form-group">
+            <label>근무 유형</label>
+            <select id="s_shift" class="form-control">
+                <option value="DAY">주간 (Day)</option>
+                <option value="EVENING">야간 (Night)</option>
+                <option value="NIGHT">심야 (Late Night)</option>
+                <option value="OFF">휴무 (Off)</option>
+            </select>
+        </div>
+        <div class="modal-actions">
+            <button class="btn btn-cancel">취소</button>
+            <button id="btnSingleSubmit" class="btn btn-primary">생성</button>
+        </div>
+    </div>
+</div>
+
+<!-- 2. Bulk Modal -->
+<div id="bulkModal" class="modal-overlay">
+    <div class="modal-content">
+        <h3>일괄 일정 등록</h3>
+        <p style="color:#666; font-size:0.9em; margin-bottom:15px;">선택한 기간 동안 동일한 근무 시간을 일괄 적용합니다.</p>
+
+        <div class="form-group">
+            <label>대상 직원</label>
+            <select id="b_staffSelect" class="form-control"></select>
+        </div>
+
+        <div class="form-group">
+            <label>기간 (월~일 권장)</label>
+            <div style="display:flex; gap:10px;">
+                <input type="date" id="b_start" class="form-control">
+                <input type="date" id="b_end" class="form-control">
+            </div>
+        </div>
+
+        <div class="form-group">
+            <label>휴무 요일 (생성 제외)</label>
+            <div class="checkbox-group">
+                <label class="checkbox-item"><input type="checkbox" class="off-day-check" value="Mon"> 월</label>
+                <label class="checkbox-item"><input type="checkbox" class="off-day-check" value="Tue"> 화</label>
+                <label class="checkbox-item"><input type="checkbox" class="off-day-check" value="Wed"> 수</label>
+                <label class="checkbox-item"><input type="checkbox" class="off-day-check" value="Thu"> 목</label>
+                <label class="checkbox-item"><input type="checkbox" class="off-day-check" value="Fri"> 금</label>
+                <label class="checkbox-item"><input type="checkbox" class="off-day-check" value="Sat"> 토</label>
+                <label class="checkbox-item"><input type="checkbox" class="off-day-check" value="Sun"> 일</label>
+            </div>
+        </div>
+
+        <div class="form-group">
+            <label>근무 시간 (Shift)</label>
+            <div style="display:flex; flex-direction:column; gap:8px;">
+                <label><input type="radio" name="b_shift" value="DAY" checked> <b>주간 (Day)</b> 09:00 ~ 18:00</label>
+                <label><input type="radio" name="b_shift" value="EVENING"> <b>야간 (Night)</b> 18:00 ~ 22:00</label>
+                <label><input type="radio" name="b_shift" value="NIGHT"> <b>심야 (Late Night)</b> 22:00 ~ 06:00
+                    (+1일)</label>
+            </div>
+        </div>
+
+        <div class="modal-actions">
+            <button class="btn btn-cancel">취소</button>
+            <button id="btnBulkSubmit" class="btn btn-primary">일괄 생성</button>
+        </div>
+    </div>
+</div>
+
+<!-- 3. Edit/Delete Modal -->
+<div id="editModal" class="modal-overlay">
+    <div class="modal-content">
+        <h3>일정 수정/삭제</h3>
+        <input type="hidden" id="e_id">
+        <h4 id="e_title" style="margin-top:0; color:#3182ce;"></h4>
+
+        <div class="form-group">
+            <label>시작</label>
+            <input type="datetime-local" id="e_start" class="form-control">
+        </div>
+        <div class="form-group">
+            <label>종료</label>
+            <input type="datetime-local" id="e_end" class="form-control">
+        </div>
+        <div class="form-group">
+            <label>상태</label>
+            <select id="e_status" class="form-control">
+                <option value="PENDING">대기 (Pending)</option>
+                <option value="CONFIRMED">확정 (Confirmed)</option>
+                <option value="CANCELLED">취소 (Cancelled)</option>
+            </select>
+        </div>
+
+        <div class="form-group" id="e_reason_group" style="display:none;">
+            <label style="color:red;">거절 사유</label>
+            <div id="e_reason" style="padding:8px; background:#fff5f5; border:1px solid #fc8181; border-radius:4px;">
+            </div>
+        </div>
+
+        <div class="modal-actions" style="justify-content: space-between;">
+            <button id="btnEditDelete" class="btn btn-danger">삭제</button>
+            <div style="display:flex; gap:10px;">
+                <button class="btn btn-cancel">취소</button>
+                <button id="btnEditSave" class="btn btn-primary">저장</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% endblock %}

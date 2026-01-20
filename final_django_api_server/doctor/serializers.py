@@ -2,7 +2,7 @@ from rest_framework import serializers
 from .models import (
     Patient, Encounter, MedicalRecord, Doctor, Appointment, ScheduleDoctor,
     LabResult, DoctorToRadiologyOrder, HCCDiagnosis, VitalData, AnthropometricData,
-    Questionnaire, LabOrder, GenomicData
+    Questionnaire, LabOrder, GenomicData, Announcement
 )
 from accounts.models import Department
 from datetime import datetime
@@ -33,6 +33,8 @@ class EncounterSerializer(serializers.ModelSerializer):
     workflow_state_display = serializers.CharField(source='get_workflow_state_display', read_only=True)
     patient_name = serializers.CharField(source='patient.name', read_only=True)
     questionnaire = QuestionnaireSerializer(read_only=True)  # 문진표 데이터 포함
+    questionnaire_status = serializers.CharField(source='questionnaire.status', read_only=True, allow_null=True)
+    questionnaire_data = serializers.JSONField(source='questionnaire.data', read_only=True, allow_null=True)
 
     class Meta:
         model = Encounter
@@ -75,17 +77,38 @@ class DepartmentSerializer(serializers.ModelSerializer):
 class DoctorListSerializer(serializers.ModelSerializer):
     """의사 목록 Serializer (원무과 접수용)"""
     department = DepartmentSerializer(read_only=True)
+    user_id = serializers.IntegerField(source='user.user_id', read_only=True)
 
     class Meta:
         model = Doctor
         fields = [
             'doctor_id',
+            'user_id',
             'name',
             'employee_no',
             'department',
             'room_number',
             'phone',
         ]
+
+
+class ScheduleDoctorSerializer(serializers.ModelSerializer):
+    """Doctor personal schedule serializer"""
+    class Meta:
+        model = ScheduleDoctor
+        fields = [
+            'schedule_id',
+            'schedule_date',
+            'schedule_type',
+            'start_time',
+            'end_time',
+            'notes',
+            'is_available',
+            'doctor',
+            'created_at',
+            'updated_at',
+        ]
+        read_only_fields = ['schedule_id', 'doctor', 'created_at', 'updated_at']
 
 
 class LabResultSerializer(serializers.ModelSerializer):
@@ -185,3 +208,28 @@ class CreateDoctorToRadiologyOrderSerializer(serializers.ModelSerializer):
     class Meta:
         model = DoctorToRadiologyOrder
         fields = ['patient', 'encounter', 'doctor', 'modality', 'body_part', 'order_notes']
+
+
+class AnnouncementSerializer(serializers.ModelSerializer):
+    """공지사항 Serializer"""
+    announcement_type_display = serializers.CharField(source='get_announcement_type_display', read_only=True)
+    author_name = serializers.CharField(source='author.username', read_only=True, allow_null=True)
+
+    class Meta:
+        model = Announcement
+        fields = [
+            'announcement_id',
+            'title',
+            'content',
+            'announcement_type',
+            'announcement_type_display',
+            'is_important',
+            'is_active',
+            'published_at',
+            'expires_at',
+            'author',
+            'author_name',
+            'created_at',
+            'updated_at',
+        ]
+        read_only_fields = ['announcement_id', 'created_at', 'updated_at']

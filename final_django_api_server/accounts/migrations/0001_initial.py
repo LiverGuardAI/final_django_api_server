@@ -78,7 +78,7 @@ class Migration(migrations.Migration):
             options={
                 'verbose_name': '근무 일정',
                 'verbose_name_plural': '근무 일정',
-                'db_table': 'hospital"."duty_schedules',
+                'db_table': 'duty_schedules',
                 'ordering': ['-start_time'],
             },
         ),

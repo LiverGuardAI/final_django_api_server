@@ -35,6 +35,10 @@ class DICOMStudy(models.Model):
     study_description = models.CharField(max_length=255, blank=True, null=True)
     study_datetime = models.DateTimeField(blank=True, null=True)
     institution_name = models.CharField(max_length=64, blank=True, null=True)
+    started_at = models.DateTimeField(blank=True, null=True)
+    ended_at = models.DateTimeField(blank=True, null=True)
+    post_processing_started_at = models.DateTimeField(blank=True, null=True)
+    post_processing_completed_at = models.DateTimeField(blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -129,3 +133,16 @@ class RadiologyToDoctorOrder(models.Model):
     
     class Meta:
         db_table = 'hospital"."radiology_to_doctor_orders'
+
+
+class CTReport(models.Model):
+    """CT 보고서"""
+
+    report_id = models.AutoField(primary_key=True)
+    series_instance_uid = models.CharField(max_length=64, db_index=True)
+    report_text = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'hospital"."ct_reports'

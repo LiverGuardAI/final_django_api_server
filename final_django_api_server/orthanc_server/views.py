@@ -23,17 +23,7 @@ ORTHANC_BASE_URL = os.getenv(
 )
 
 
-def _extract_dicom_tags(file_content: bytes) -> dict:
-    try:
-        dataset = pydicom.dcmread(
-            io.BytesIO(file_content),
-            stop_before_pixels=True,
-            force=True,
-        )
-    except Exception as exc:
-        print(f"Failed to read DICOM metadata: {exc}")
-        return {}
-
+def _extract_dicom_tags_from_dataset(dataset) -> dict:
     def get_value(attr: str):
         value = getattr(dataset, attr, None)
         return str(value) if value is not None else None
@@ -54,7 +44,51 @@ def _extract_dicom_tags(file_content: bytes) -> dict:
     }
 
 
-def _get_or_create_study(tags: dict, patient_id: str) -> DICOMStudy | None:
+def _extract_dicom_tags(file_content: bytes) -> dict:
+    try:
+        dataset = pydicom.dcmread(
+            io.BytesIO(file_content),
+            stop_before_pixels=True,
+            force=True,
+        )
+    except Exception as exc:
+        print(f"Failed to read DICOM metadata: {exc}")
+        return {}
+
+    return _extract_dicom_tags_from_dataset(dataset)
+
+
+def _prepare_dicom_payload(file_content: bytes, study_uid: str | None) -> tuple[bytes, dict]:
+    if not study_uid:
+        return file_content, _extract_dicom_tags(file_content)
+
+    try:
+        dataset = pydicom.dcmread(
+            io.BytesIO(file_content),
+            force=True,
+        )
+    except Exception as exc:
+        print(f"Failed to read DICOM for UID override: {exc}")
+        return file_content, _extract_dicom_tags(file_content)
+
+    dataset.StudyInstanceUID = study_uid
+    tags = _extract_dicom_tags_from_dataset(dataset)
+
+    updated_buffer = io.BytesIO()
+    try:
+        pydicom.dcmwrite(updated_buffer, dataset, write_like_original=False)
+    except Exception as exc:
+        print(f"Failed to write DICOM for UID override: {exc}")
+        return file_content, tags
+
+    return updated_buffer.getvalue(), tags
+
+
+def _get_or_create_study(
+    tags: dict,
+    patient_id: str,
+    parent_study_id: str | None = None
+) -> DICOMStudy | None:
     study_uid = tags.get('StudyInstanceUID')
     if not study_uid:
         return None
@@ -64,8 +98,12 @@ def _get_or_create_study(tags: dict, patient_id: str) -> DICOMStudy | None:
         'study_description': tags.get('StudyDescription'),
         'institution_name': tags.get('InstitutionName'),
         'study_datetime': timezone.now(),
+        'orthanc_study_id': parent_study_id,
     }
-    study, _ = DICOMStudy.objects.get_or_create(study_uid=study_uid, defaults=defaults)
+    study, created = DICOMStudy.objects.get_or_create(study_uid=study_uid, defaults=defaults)
+    if not created and parent_study_id and not study.orthanc_study_id:
+        study.orthanc_study_id = parent_study_id
+        study.save(update_fields=['orthanc_study_id'])
     return study
 
 
@@ -89,13 +127,18 @@ def _get_or_create_series(tags: dict, parent_series_id: str | None, study: DICOM
     return series
 
 
-def _ensure_series_and_run(tags: dict, parent_series_id: str | None, created_series: set) -> None:
+def _ensure_series_and_run(
+    tags: dict,
+    parent_series_id: str | None,
+    parent_study_id: str | None,
+    created_series: set
+) -> None:
     patient_id = tags.get('PatientID')
     if not patient_id:
         print("RadiologyAIRun skipped: patient_id tag missing")
         return
 
-    study = _get_or_create_study(tags, patient_id)
+    study = _get_or_create_study(tags, patient_id, parent_study_id)
     if not study:
         print("RadiologyAIRun skipped: study tag missing")
         return
@@ -140,6 +183,7 @@ class UploadDicomView(APIView):
             }, status=status.HTTP_400_BAD_REQUEST)
 
         file_name = uploaded_file.name.lower()
+        study_uid = request.data.get('study_uid')
 
         # DICOM 또는 ZIP 파일 확장자 검증
         if not (file_name.endswith('.dcm') or file_name.endswith('.dicom') or file_name.endswith('.zip')):
@@ -171,7 +215,7 @@ class UploadDicomView(APIView):
                         try:
                             with zip_ref.open(entry) as dicom_file:
                                 file_content = dicom_file.read()
-                            tags = _extract_dicom_tags(file_content)
+                            file_content, tags = _prepare_dicom_payload(file_content, study_uid)
 
                             orthanc_response = requests.post(
                                 f'{ORTHANC_BASE_URL}/instances',
@@ -186,9 +230,10 @@ class UploadDicomView(APIView):
                                 payload = orthanc_response.json()
                                 successes.append(payload)
                                 parent_series_id = payload.get('ParentSeries')
+                                parent_study_id = payload.get('ParentStudy')
                                 series_uid = tags.get('SeriesInstanceUID') or parent_series_id
                                 if series_uid and series_uid not in seen_candidates:
-                                    series_candidates.append((tags, parent_series_id))
+                                    series_candidates.append((tags, parent_series_id, parent_study_id))
                                     seen_candidates.add(series_uid)
                             else:
                                 errors.append({
@@ -201,8 +246,8 @@ class UploadDicomView(APIView):
                                 'error': str(exc)
                             })
 
-                    for tags, parent_series_id in series_candidates:
-                        _ensure_series_and_run(tags, parent_series_id, created_series)
+                    for tags, parent_series_id, parent_study_id in series_candidates:
+                        _ensure_series_and_run(tags, parent_series_id, parent_study_id, created_series)
 
                     response_payload = {
                         'Status': 'Success' if not errors else 'PartialSuccess',
@@ -217,7 +262,7 @@ class UploadDicomView(APIView):
 
             # 파일 내용 읽기
             file_content = uploaded_file.read()
-            tags = _extract_dicom_tags(file_content)
+            file_content, tags = _prepare_dicom_payload(file_content, study_uid)
 
             # Orthanc 서버로 전송
             orthanc_response = requests.post(
@@ -233,8 +278,9 @@ class UploadDicomView(APIView):
             if orthanc_response.status_code == 200:
                 payload = orthanc_response.json()
                 parent_series_id = payload.get('ParentSeries')
+                parent_study_id = payload.get('ParentStudy')
                 created_series = set()
-                _ensure_series_and_run(tags, parent_series_id, created_series)
+                _ensure_series_and_run(tags, parent_series_id, parent_study_id, created_series)
                 return Response(payload, status=status.HTTP_200_OK)
             else:
                 return Response({
