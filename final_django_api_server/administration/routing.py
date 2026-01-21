@@ -4,4 +4,6 @@ from . import consumers
 websocket_urlpatterns = [
     # ws://localhost:8000/ws/clinic/ 주소로 들어오면 연결!
     re_path(r'ws/clinic/$', consumers.ClinicConsumer.as_asgi()),
+    # ws://localhost:8000/ws/app/<profile_id>/ Flutter 앱 전용
+    re_path(r'ws/app/(?P<profile_id>[^/]+)/$', consumers.FlutterAppConsumer.as_asgi()),
 ]

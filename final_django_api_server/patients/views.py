@@ -13,6 +13,8 @@ from datetime import date, datetime, time, timedelta
 from .models import UserProfile, AppSyncRequest, Allergy, DiseaseHistory
 from .serializers import SignupSerializer, LoginSerializer, AppSyncRequestSerializer, AllergySerializer, DiseaseHistorySerializer
 from doctor.models import Patient, MedicalRecord, Prescription, Encounter
+from channels.layers import get_channel_layer
+from asgiref.sync import async_to_sync
 
 
 @api_view(['POST'])
@@ -161,6 +163,20 @@ def app_sync_request_create(request):
         )
 
         serializer = AppSyncRequestSerializer(sync_request)
+
+        # WebSocket으로 원무과에 실시간 알림 전송
+        try:
+            channel_layer = get_channel_layer()
+            async_to_sync(channel_layer.group_send)(
+                'clinic_dashboard',
+                {
+                    'type': 'app_sync_request',
+                    'message': f'새로운 앱 연동 신청: {profile.nickname}',
+                    'data': serializer.data
+                }
+            )
+        except Exception as e:
+            print(f"WebSocket 알림 전송 실패: {e}")
 
         return Response({
             "success": True,
@@ -333,6 +349,24 @@ def app_sync_request_approve(request, request_id):
 
         serializer = AppSyncRequestSerializer(sync_request)
 
+        # WebSocket으로 Flutter 앱에 실시간 알림 전송
+        try:
+            channel_layer = get_channel_layer()
+            async_to_sync(channel_layer.group_send)(
+                f'app_user_{profile.profile_id}',
+                {
+                    'type': 'app_sync_result',
+                    'message': '병원 연동이 승인되었습니다.',
+                    'data': {
+                        'status': 'APPROVED',
+                        'patient_id': patient_id,
+                        'profile_id': str(profile.profile_id),
+                    }
+                }
+            )
+        except Exception as e:
+            print(f"WebSocket 알림 전송 실패: {e}")
+
         return Response({
             "success": True,
             "message": f"연동 신청이 승인되었습니다. ({profile.nickname} → {patient_id})",
@@ -495,6 +529,24 @@ def app_sync_request_reject(request, request_id):
         sync_request.save()
 
         serializer = AppSyncRequestSerializer(sync_request)
+
+        # WebSocket으로 Flutter 앱에 실시간 알림 전송
+        try:
+            profile = sync_request.profile
+            channel_layer = get_channel_layer()
+            async_to_sync(channel_layer.group_send)(
+                f'app_user_{profile.profile_id}',
+                {
+                    'type': 'app_sync_result',
+                    'message': '병원 연동이 거절되었습니다.',
+                    'data': {
+                        'status': 'REJECTED',
+                        'profile_id': str(profile.profile_id),
+                    }
+                }
+            )
+        except Exception as e:
+            print(f"WebSocket 알림 전송 실패: {e}")
 
         return Response({
             "success": True,
