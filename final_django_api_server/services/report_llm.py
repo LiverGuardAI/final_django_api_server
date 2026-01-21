@@ -27,6 +27,10 @@ Output format:
 """
 
 def generate_tumor_analysis_report(findings: dict) -> str:
+    client = get_client()
+    if client is None:
+        raise ValueError("OPENAI_API_KEY is not set")
+    
     resp = client.responses.create(
         model="gpt-4.1-mini",   # 가성비 최고
         temperature=0.1,        # 숫자 안 바꾸게 최대한 보수적으로
