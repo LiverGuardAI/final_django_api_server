@@ -14,9 +14,27 @@ class Migration(migrations.Migration):
             name='encounter',
             options={},
         ),
-        migrations.AlterModelTable(
-            name='doctortoradiologyorder',
-            table='hospital"."doctor_to_radiology_orders',
+        migrations.SeparateDatabaseAndState(
+            state_operations=[
+                migrations.AlterModelTable(
+                    name='doctortoradiologyorder',
+                    table='hospital"."doctor_to_radiology_orders',
+                ),
+            ],
+            database_operations=[
+                migrations.RunSQL(
+                    sql="""
+                        CREATE SCHEMA IF NOT EXISTS hospital;
+                        ALTER TABLE IF EXISTS doctor_doctortoradiologyorder SET SCHEMA hospital;
+                        ALTER TABLE IF EXISTS doctor_to_radiology_orders SET SCHEMA hospital;
+                        ALTER TABLE IF EXISTS hospital.doctor_doctortoradiologyorder RENAME TO doctor_to_radiology_orders;
+                    """,
+                    reverse_sql="""
+                        ALTER TABLE IF EXISTS hospital.doctor_to_radiology_orders SET SCHEMA public;
+                        ALTER TABLE IF EXISTS public.doctor_to_radiology_orders RENAME TO doctor_doctortoradiologyorder;
+                    """,
+                ),
+            ],
         ),
         migrations.RemoveField(
             model_name="scheduledoctor",

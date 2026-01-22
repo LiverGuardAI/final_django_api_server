@@ -4,9 +4,9 @@ import os
 import requests
 
 
-LMSTUDIO_URL = os.environ.get("LMSTUDIO_URL", "http://localhost:1234") #
-LMSTUDIO_MODEL = os.environ.get("LMSTUDIO_MODEL", "default")
-LMSTUDIO_TEMPERATURE = float(os.environ.get("LMSTUDIO_TEMPERATURE", "0.7"))
+LMSTUDIO_URL = os.environ.get("LMSTUDIO_URL", "")
+LMSTUDIO_MODEL = os.environ.get("LMSTUDIO_MODEL", "")
+LMSTUDIO_TEMPERATURE = float(os.environ.get("LMSTUDIO_TEMPERATURE", ""))
 
 SYSTEM_PROMPT = """
 You are a medical radiology report generator specialized in liver tumor analysis.
@@ -71,6 +71,12 @@ def generate_lmstudio_report(
         {"role": "user", "content": report_content},
     ]
 
+    headers = {
+        "Content-Type": "application/json",
+        "CF-Access-Client-Id": os.environ["CF_ACCESS_CLIENT_ID"],
+        "CF-Access-Client-Secret": os.environ["CF_ACCESS_CLIENT_SECRET"],
+    }
+
     response = requests.post(
         LMSTUDIO_URL,
         json={
@@ -78,6 +84,7 @@ def generate_lmstudio_report(
             "messages": messages,
             "temperature": LMSTUDIO_TEMPERATURE,
         },
+        headers=headers,
         timeout=60,
     )
     response.raise_for_status()

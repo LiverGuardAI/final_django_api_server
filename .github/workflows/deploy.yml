@@ -1,9 +1,7 @@
 name: Deploy Django to GCP
 
 on:
-  push:
-    branches:
-      - main
+  workflow_dispatch:
 
 jobs:
   deploy:

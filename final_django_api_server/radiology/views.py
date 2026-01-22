@@ -25,9 +25,13 @@ import pydicom
 import requests
 
 
-ORTHANC_BASE_URL = os.getenv(
-    'ORTHANC_BASE_URL',
-    'http://34.67.62.238/orthanc'
+ORTHANC_BASE_URL = os.getenv('ORTHANC_BASE_URL', '')
+ORTHANC_USER_NAME = os.getenv('ORTHANC_USER_NAME', '')
+ORTHANC_PASSWORD = os.getenv('ORTHANC_PASSWORD', '')
+ORTHANC_AUTH = (
+    (ORTHANC_USER_NAME, ORTHANC_PASSWORD)
+    if ORTHANC_USER_NAME and ORTHANC_PASSWORD
+    else None
 )
 
 TUMOR_LABEL_VALUES = {2, 2000}
@@ -51,6 +55,7 @@ def _convert_numpy_types(obj):
 def _download_series_archive(series_id: str) -> bytes:
     response = requests.get(
         f'{ORTHANC_BASE_URL}/series/{series_id}/archive',
+        auth=ORTHANC_AUTH,
         timeout=120
     )
     if response.status_code != 200:
@@ -474,6 +479,7 @@ class DICOMStudySeriesView(APIView):
                             "StudyInstanceUID": study_uid
                         }
                     },
+                    auth=ORTHANC_AUTH,
                     timeout=10
                 )
                 if search_response.status_code == 200:
@@ -490,6 +496,7 @@ class DICOMStudySeriesView(APIView):
             try:
                 response = requests.get(
                     f'{ORTHANC_BASE_URL}/studies/{orthanc_study_id}',
+                    auth=ORTHANC_AUTH,
                     timeout=10
                 )
                 if response.status_code == 200:

@@ -1,3 +1,4 @@
+import logging
 import requests
 import pandas as pd
 from django.conf import settings
@@ -19,6 +20,7 @@ from .tasks import (
     process_all_predictions
 )
 
+logger = logging.getLogger(__name__)
 
 
 
@@ -175,7 +177,7 @@ class BentoMLHealthView(APIView):
     
     def get(self, request):
         try:
-            url = f"{settings.BENTOML_SERVER_URL}/health"
+            url = f"{settings.BENTOML_BASE_URL}/health"
             resp = requests.post(url, json={}, timeout=10)
             return Response(resp.json(), status=resp.status_code)
         except Exception as e:
@@ -377,7 +379,7 @@ def search_drugs(request):
 
     try:
         # 💡 BentoML은 @bentoml.api에서 POST와 JSON 바디를 기대합니다.
-        target_url = f"{settings.BENTOML_SERVER_URL}/search_master"
+        target_url = f"{settings.BENTOML_BASE_URL}/search_master"
         response = requests.post(target_url, json={'q': query}, timeout=5)
         
         if response.status_code == 200:
@@ -405,7 +407,7 @@ class DDIAnalysisView(APIView):
 
         try:
             # 3. BentoML 통합 분석 엔드포인트 호출
-            target_url = f"{settings.BENTOML_SERVER_URL}/check_ddi"
+            target_url = f"{settings.BENTOML_BASE_URL}/check_ddi"
             
             # 💡 BentoML service.py의 check_ddi(self, prescription: List)와 이름 일치
             payload = {"prescription": prescription}
@@ -470,4 +472,3 @@ class ClinicalNoteGenerateView(APIView):
             return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         except Exception as exc:
             return Response({"error": f"Server error: {str(exc)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-

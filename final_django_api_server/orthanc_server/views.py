@@ -17,11 +17,14 @@ from radiology.models import DICOMSeries, DICOMStudy, RadiologyAIRun
 
 
 # Orthanc 서버 설정
-ORTHANC_BASE_URL = os.getenv(
-    'ORTHANC_BASE_URL',
-    'http://34.67.62.238/orthanc'  # 기본값 (로컬 개발용)
+ORTHANC_BASE_URL = os.getenv('ORTHANC_BASE_URL', '')
+ORTHANC_USER_NAME = os.getenv('ORTHANC_USER_NAME', '')
+ORTHANC_PASSWORD = os.getenv('ORTHANC_PASSWORD', '')
+ORTHANC_AUTH = (
+    (ORTHANC_USER_NAME, ORTHANC_PASSWORD)
+    if ORTHANC_USER_NAME and ORTHANC_PASSWORD
+    else None
 )
-
 
 def _extract_dicom_tags_from_dataset(dataset) -> dict:
     def get_value(attr: str):
@@ -223,6 +226,7 @@ class UploadDicomView(APIView):
                                 headers={
                                     'Content-Type': 'application/dicom'
                                 },
+                                auth=ORTHANC_AUTH,
                                 timeout=30
                             )
 
@@ -271,6 +275,7 @@ class UploadDicomView(APIView):
                 headers={
                     'Content-Type': 'application/dicom'
                 },
+                auth=ORTHANC_AUTH,
                 timeout=30
             )
 
@@ -312,6 +317,7 @@ class OrthancSystemInfoView(APIView):
         try:
             response = requests.get(
                 f'{ORTHANC_BASE_URL}/system',
+                auth=ORTHANC_AUTH,
                 timeout=10
             )
 
@@ -344,6 +350,7 @@ class OrthancStudyView(APIView):
         try:
             response = requests.get(
                 f'{ORTHANC_BASE_URL}/studies/{study_id}',
+                auth=ORTHANC_AUTH,
                 timeout=10
             )
 
@@ -376,6 +383,7 @@ class OrthancInstanceView(APIView):
         try:
             response = requests.get(
                 f'{ORTHANC_BASE_URL}/instances/{instance_id}',
+                auth=ORTHANC_AUTH,
                 timeout=10
             )
 
@@ -408,6 +416,7 @@ class OrthancSeriesListView(APIView):
         try:
             response = requests.get(
                 f'{ORTHANC_BASE_URL}/series',
+                auth=ORTHANC_AUTH,
                 timeout=10
             )
 
@@ -420,6 +429,7 @@ class OrthancSeriesListView(APIView):
                     try:
                         series_response = requests.get(
                             f'{ORTHANC_BASE_URL}/series/{series_id}',
+                            auth=ORTHANC_AUTH,
                             timeout=5
                         )
                         if series_response.status_code == 200:
@@ -456,6 +466,7 @@ class OrthancSeriesView(APIView):
         try:
             response = requests.get(
                 f'{ORTHANC_BASE_URL}/series/{series_id}',
+                auth=ORTHANC_AUTH,
                 timeout=10
             )
 
@@ -488,6 +499,7 @@ class OrthancSeriesInstancesView(APIView):
         try:
             response = requests.get(
                 f'{ORTHANC_BASE_URL}/series/{series_id}/instances',
+                auth=ORTHANC_AUTH,
                 timeout=10
             )
 
@@ -520,6 +532,7 @@ class OrthancInstanceFileView(APIView):
         try:
             response = requests.get(
                 f'{ORTHANC_BASE_URL}/instances/{instance_id}/file',
+                auth=ORTHANC_AUTH,
                 timeout=30
             )
 
@@ -556,6 +569,7 @@ class OrthancSeriesArchiveView(APIView):
         try:
             response = requests.get(
                 f'{ORTHANC_BASE_URL}/series/{series_id}/archive',
+                auth=ORTHANC_AUTH,
                 timeout=60,
                 stream=True
             )
@@ -600,6 +614,7 @@ class OrthancPatientStudiesView(APIView):
                         "PatientID": patient_id
                     }
                 },
+                auth=ORTHANC_AUTH,
                 timeout=10
             )
 
@@ -618,6 +633,7 @@ class OrthancPatientStudiesView(APIView):
             patient_uuid = patient_uuids[0]
             patient_response = requests.get(
                 f'{ORTHANC_BASE_URL}/patients/{patient_uuid}',
+                auth=ORTHANC_AUTH,
                 timeout=10
             )
 
@@ -635,6 +651,7 @@ class OrthancPatientStudiesView(APIView):
                 try:
                     study_response = requests.get(
                         f'{ORTHANC_BASE_URL}/studies/{study_id}',
+                        auth=ORTHANC_AUTH,
                         timeout=5
                     )
                     if study_response.status_code == 200:
@@ -671,6 +688,7 @@ class OrthancStudySeriesView(APIView):
             # 먼저 Study 정보 조회
             study_response = requests.get(
                 f'{ORTHANC_BASE_URL}/studies/{study_id}',
+                auth=ORTHANC_AUTH,
                 timeout=10
             )
 
@@ -688,6 +706,7 @@ class OrthancStudySeriesView(APIView):
                 try:
                     series_response = requests.get(
                         f'{ORTHANC_BASE_URL}/series/{series_id}',
+                        auth=ORTHANC_AUTH,
                         timeout=5
                     )
                     if series_response.status_code == 200:
@@ -711,6 +730,7 @@ class OrthancStudySeriesView(APIView):
                                     instance_id = instances[0]
                                     tags_response = requests.get(
                                         f'{ORTHANC_BASE_URL}/instances/{instance_id}/tags?simplify',
+                                        auth=ORTHANC_AUTH,
                                         timeout=5
                                     )
                                     if tags_response.status_code == 200:
@@ -748,6 +768,7 @@ class OrthancSeriesNiftiView(APIView):
             # Step 1: Series의 모든 instances 가져오기
             instances_response = requests.get(
                 f'{ORTHANC_BASE_URL}/series/{series_id}/instances',
+                auth=ORTHANC_AUTH,
                 timeout=10
             )
 
@@ -771,6 +792,7 @@ class OrthancSeriesNiftiView(APIView):
                 # DICOM 파일 다운로드
                 file_response = requests.get(
                     f'{ORTHANC_BASE_URL}/instances/{instance_id}/file',
+                    auth=ORTHANC_AUTH,
                     timeout=30
                 )
 

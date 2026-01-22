@@ -5,6 +5,14 @@ import msgpack
 import numpy as np
 from django.conf import settings
 
+ORTHANC_USER_NAME = os.getenv('ORTHANC_USER_NAME', '')
+ORTHANC_PASSWORD = os.getenv('ORTHANC_PASSWORD', '')
+ORTHANC_AUTH = (
+    (ORTHANC_USER_NAME, ORTHANC_PASSWORD)
+    if ORTHANC_USER_NAME and ORTHANC_PASSWORD
+    else None
+)
+
 
 def _convert_numpy_types(obj):
     """
@@ -30,6 +38,7 @@ def _get_series_instance_uid(orthanc_base_url, orthanc_series_id):
     try:
         response = requests.get(
             f"{orthanc_base_url}/series/{orthanc_series_id}",
+            auth=ORTHANC_AUTH,
             timeout=30,
         )
         response.raise_for_status()
@@ -52,7 +61,7 @@ def process_segmentation(self, series_id):
         Segmentation result with mask series ID
     """
     # Mosec API endpoint
-    mosec_url = os.getenv('MOSEC_BASE_URL', 'http://host.docker.internal:8001')
+    mosec_url = os.getenv('MOSEC_BASE_URL', '')
     endpoint = f'{mosec_url}/ai/mosec/nnU-Net-Seg'
     USE_CLOUDFLARE_MOSEC = os.getenv("USE_CLOUDFLARE_MOSEC", "0") == "1"
 
@@ -99,7 +108,7 @@ def process_segmentation(self, series_id):
         try:
             from radiology.models import RadiologyAIRun
 
-            orthanc_url = os.getenv('ORTHANC_BASE_URL', 'http://34.67.62.238/orthanc')
+            orthanc_url = os.getenv('ORTHANC_BASE_URL', '')
             series_instance_uid = _get_series_instance_uid(orthanc_url, series_id)
 
             mask_series_uid = (
@@ -157,7 +166,7 @@ def process_feature_extraction(self, series_instance_uid):
     Returns:
         Feature extraction result
     """
-    mosec_url = os.getenv('MOSEC_FEATURE_BASE_URL', 'http://host.docker.internal:8002')
+    mosec_url = os.getenv('MOSEC_FEATURE_BASE_URL', '')
     endpoint = f'{mosec_url}/inference'
     USE_CLOUDFLARE_MOSEC = os.getenv("USE_CLOUDFLARE_MOSEC", "0") == "1"
 
@@ -282,7 +291,7 @@ def process_stage_prediction(self, clinical, series_uid):
     """
     from .models import RadioFeatureVector
 
-    bentoml_url = os.getenv('BENTOML_BASE_URL', 'http://host.docker.internal:3001')
+    bentoml_url = os.getenv('BENTOML_BASE_URL', '')
     endpoint = f'{bentoml_url}/predict_stage'
 
     try:
@@ -299,9 +308,6 @@ def process_stage_prediction(self, clinical, series_uid):
         try:
             radio_vector = RadioFeatureVector.objects.filter(series_id=series_uid).latest('created_at')
             ct = list(radio_vector.feature_vector) if radio_vector.feature_vector is not None else []
-            ct = _convert_numpy_types(ct)
-            ct = _convert_numpy_types(ct)
-            ct = _convert_numpy_types(ct)
             ct = _convert_numpy_types(ct)
         except RadioFeatureVector.DoesNotExist:
             return {
@@ -386,7 +392,7 @@ def process_relapse_prediction(self, clinical, mrna, series_uid):
     """
     from .models import RadioFeatureVector
 
-    bentoml_url = os.getenv('BENTOML_BASE_URL', 'http://host.docker.internal:3001')
+    bentoml_url = os.getenv('BENTOML_BASE_URL', '')
     endpoint = f'{bentoml_url}/predict_relapse'
 
     try:
@@ -488,7 +494,7 @@ def process_survival_prediction(self, clinical, mrna, series_uid):
     """
     from .models import RadioFeatureVector
 
-    bentoml_url = os.getenv('BENTOML_BASE_URL', 'http://host.docker.internal:3001')
+    bentoml_url = os.getenv('BENTOML_BASE_URL', '')
     endpoint = f'{bentoml_url}/predict_survival'
 
     try:
@@ -590,7 +596,7 @@ def process_all_predictions(self, clinical, mrna, series_uid):
     """
     from .models import RadioFeatureVector
 
-    bentoml_url = os.getenv('BENTOML_BASE_URL', 'http://host.docker.internal:3001')
+    bentoml_url = os.getenv('BENTOML_BASE_URL', '')
     endpoint = f'{bentoml_url}/predict'
 
     try:

@@ -20,7 +20,7 @@ from django.conf import settings
 from django.conf.urls.static import static
 
 urlpatterns = [
-    path('admin/', admin.site.urls),
+    path('api/admin/', admin.site.urls),
     path('api/ai/', include('ai_model_server.urls')),  # AI 관련 URL
     path('api/auth/', include('accounts.urls')),  # 인증 관련 URL
     path('api/doctor/', include('doctor.urls')),  # 의사 API

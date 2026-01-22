@@ -13,7 +13,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(os.path.join(BASE_DIR.parent, '.env.local'))
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-kh(mfpuldkd&5r9^!_$9lh02df7-ky017#&&$wi0_d-3l518ok'
+SECRET_KEY = os.environ.get("SECRET_KEY", "")
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
@@ -85,11 +85,11 @@ ASGI_APPLICATION = 'liverguard_api_server.asgi.application'
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.postgresql',
-        'NAME': os.environ.get('POSTGRES_DB', 'liverguard_db'),
-        'USER': os.environ.get('POSTGRES_USER', 'postgres'),
-        'PASSWORD': os.environ.get('POSTGRES_PASSWORD', 'postgres1234'),
-        'HOST': os.environ.get('POSTGRES_HOST', '34.67.62.238'),
-        'PORT': os.environ.get('POSTGRES_PORT', '5432'),
+        'NAME': os.environ.get('POSTGRES_DB', ''),
+        'USER': os.environ.get('POSTGRES_USER', ''),
+        'PASSWORD': os.environ.get('POSTGRES_PASSWORD', ''),
+        'HOST': os.environ.get('POSTGRES_HOST', ''),
+        'PORT': os.environ.get('POSTGRES_PORT', ''),
         'CONN_MAX_AGE': 0,
         'OPTIONS': {
             'options': '-c timezone=Asia/Seoul'
@@ -100,8 +100,8 @@ DATABASES = {
 # ------------------------------------------------------------------------------
 # Redis Configuration
 # ------------------------------------------------------------------------------
-REDIS_HOST = os.environ.get('REDIS_HOST', 'redis')  # 기본값 redis로 변경
-REDIS_PORT = int(os.environ.get('REDIS_PORT', 6379))
+REDIS_HOST = os.environ.get('REDIS_HOST', '')  # 기본값 redis로 변경
+REDIS_PORT = int(os.environ.get('REDIS_PORT', 0))
 REDIS_DB = int(os.environ.get('REDIS_DB', 0))
 
 CHANNEL_LAYERS = {
@@ -122,10 +122,10 @@ ASGI_THREADS = 4  # ASGI 워커 스레드 수
 # RabbitMQ Configuration (진료 대기열 관리)
 # 403 에러 방지를 위해 User/Pass를 명확히 환경변수에서 가져오고 기본값 설정
 # ------------------------------------------------------------------------------
-RABBITMQ_HOST = os.environ.get('RABBITMQ_HOST', 'rabbitmq') # 기본값 rabbitmq로 변경
-RABBITMQ_PORT = int(os.environ.get('RABBITMQ_PORT', 5672))
-RABBITMQ_USER = os.environ.get('RABBITMQ_USER', 'admin')
-RABBITMQ_PASSWORD = os.environ.get('RABBITMQ_PASSWORD', 'admin123')
+RABBITMQ_HOST = os.environ.get('RABBITMQ_HOST', '') # 기본값 rabbitmq로 변경
+RABBITMQ_PORT = int(os.environ.get('RABBITMQ_PORT', 0))
+RABBITMQ_USER = os.environ.get('RABBITMQ_USER', '')
+RABBITMQ_PASSWORD = os.environ.get('RABBITMQ_PASSWORD', '')
 RABBITMQ_VHOST = os.environ.get('RABBITMQ_VHOST', '/')
 
 
@@ -152,7 +152,6 @@ CELERY_TIMEZONE = 'Asia/Seoul'
 CELERY_TASK_TRACK_STARTED = True
 CELERY_TASK_TIME_LIMIT = 3600  # 1 hour
 
-
 # Custom user 
 AUTH_USER_MODEL = 'accounts.CustomUser'
 
@@ -166,22 +165,22 @@ AUTH_PASSWORD_VALIDATORS = [
 
 # CORS 설정
 CORS_ALLOWED_ORIGINS = [
-    "http://34.67.62.238:5173",
-    "http://34.67.62.238:3000",
-    "http://localhost:5173",
-    "http://localhost:3000", # 로컬 개발용 추가
-]
-CORS_ALLOW_CREDENTIALS = True
-
-CSRF_TRUSTED_ORIGINS = [
-    "http://34.67.62.238:5173",
-    "http://34.67.62.238:3000",
     "http://localhost:5173",
     "http://localhost:3000",
     "http://127.0.0.1:5173",
     "http://127.0.0.1:3000",
+    os.environ.get("AWS_IP_ADDRESS", ""),
+]
+CORS_ALLOW_CREDENTIALS = True
+
+CSRF_TRUSTED_ORIGINS = [
+    "http://localhost:5173",
+    "http://localhost:3000",
     "http://localhost:8000",
+    "http://127.0.0.1:5173",
+    "http://127.0.0.1:3000",
     "http://127.0.0.1:8000",
+    os.environ.get("AWS_IP_ADDRESS", ""),
 ]
 
 # REST Framework 설정
@@ -197,7 +196,7 @@ REST_FRAMEWORK = {
 # Simple JWT 설정
 from datetime import timedelta
 SIMPLE_JWT = {
-    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=60), # 개발 편의를 위해 60분으로 늘림 (필요시 10분 복구)
+    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=60),
     'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
     'ROTATE_REFRESH_TOKENS': False,
     'BLACKLIST_AFTER_ROTATION': False,
@@ -220,12 +219,8 @@ STATICFILES_DIRS = []
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
-
 # BentoML Server URL
-BENTOML_SERVER_URL = "http://bentoml:3001"
-
-# Docker Compose 사용 시:
-# BENTOML_SERVER_URL = "http://bentoml_server:3000"
+BENTOML_BASE_URL = os.environ.get("BENTOML_BASE_URL", "")
 
 DATA_DIR = os.path.join(BASE_DIR, 'data')
 MEDICINE_MASTER_PATH = os.path.join(DATA_DIR, 'medicine_master_v3.csv')
