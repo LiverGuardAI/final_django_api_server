@@ -86,6 +86,21 @@ class ClinicConsumer(AsyncWebsocketConsumer):
             else:
                 print("DEBUG: User not authenticated, skipping personal group")
 
+            # 3. Join role-based groups
+            self.role_groups = []
+            if user and user.is_authenticated:
+                role = (getattr(user, 'role', '') or '').upper()
+                if role == 'DOCTOR':
+                    self.role_groups.append('doctor_dashboard')
+                elif role == 'RADIOLOGIST':
+                    self.role_groups.append('radiology_dashboard')
+                elif role == 'CLERK':
+                    self.role_groups.append('admin_dashboard')
+
+                for group_name in self.role_groups:
+                    await self.channel_layer.group_add(group_name, self.channel_name)
+                    print(f"DEBUG: Added to role group {group_name}")
+
             print("DEBUG: Redis group_add successful")
             
             await self.accept()
@@ -101,6 +116,7 @@ class ClinicConsumer(AsyncWebsocketConsumer):
         # Fire-and-forget: 그룹 정리를 백그라운드로 실행하고 즉시 반환
         # Redis expiry=10초가 백업으로 자동 정리함
         group_name = getattr(self, 'group_name', None)
+        role_groups = getattr(self, 'role_groups', [])
         user = self.scope.get('user')
         channel_name = self.channel_name
         channel_layer = self.channel_layer
@@ -109,6 +125,9 @@ class ClinicConsumer(AsyncWebsocketConsumer):
             tasks = []
             if group_name:
                 tasks.append(channel_layer.group_discard(group_name, channel_name))
+            if role_groups:
+                for role_group in role_groups:
+                    tasks.append(channel_layer.group_discard(role_group, channel_name))
             if user and user.is_authenticated:
                 tasks.append(channel_layer.group_discard(f"user_{user.user_id}", channel_name))
 

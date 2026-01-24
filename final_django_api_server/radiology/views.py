@@ -5,6 +5,7 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny
 from django.db.models import Q
 from django.utils import timezone
+from django.db import transaction
 from accounts.permissions import IsRadiologist, IsDoctorOrRadiologist
 from doctor.models import Patient, Encounter
 from .models import DICOMStudy, DICOMSeries
@@ -533,13 +534,50 @@ class PostProcessingActiveView(APIView):
         }, status=status.HTTP_200_OK)
 
 
+class EncounterStudyView(APIView):
+    """Encounter에 연결된 DICOM 스터디 정보 조회 API"""
+    permission_classes = [IsDoctorOrRadiologist]
+
+    def get(self, request, encounter_id):
+        encounter = Encounter.objects.select_related('patient').filter(
+            encounter_id=encounter_id
+        ).first()
+
+        if not encounter:
+            return Response({
+                'error': f'Encounter {encounter_id} not found'
+            }, status=status.HTTP_404_NOT_FOUND)
+
+        study = DICOMStudy.objects.filter(encounter=encounter).order_by(
+            '-started_at', '-created_at'
+        ).first()
+        order_notes = list(
+            encounter.doctortoradiologyorder_set.exclude(
+                order_notes__isnull=True
+            ).exclude(
+                order_notes__exact=''
+            ).values_list('order_notes', flat=True)
+        )
+
+        return Response({
+            'encounter_id': encounter.encounter_id,
+            'study_uid': study.study_uid if study else None,
+            'patient_id': encounter.patient.patient_id,
+            'patient_name': encounter.patient.name,
+            'gender': encounter.patient.gender,
+            'date_of_birth': encounter.patient.date_of_birth.isoformat() if encounter.patient.date_of_birth else None,
+            'age': encounter.patient.age,
+            'order_notes': order_notes,
+        }, status=status.HTTP_200_OK)
+
+
 class WaitlistView(APIView):
     """촬영 대기 환자 목록 조회 API (영상의학과 전용)"""
     permission_classes = [AllowAny]  # TODO: 나중에 IsRadiologist로 변경 필요
 
     def get(self, request):
         """
-        Encounter.workflow_state가 'WAITING_IMAGING' 또는 'IN_IMAGING'인 환자 목록 조회
+        DoctorToRadiologyOrder.status가 'WAITING' 또는 'IN_PROGRESS'인 환자 목록 조회
         - Redis 캐싱 적용 (5초 TTL)
         - DoctorToRadiologyOrder 처방 정보 포함
         - 대기 시간 계산
@@ -552,18 +590,29 @@ class WaitlistView(APIView):
         cache_key = 'waiting_queue_list:imaging'
 
         # 1. 캐시 확인
-        cached_data = cache_manager.redis_client.get(cache_key)
+        cached_data = None
+        if cache_manager.is_connected():
+            cached_data = cache_manager.redis_client.get(cache_key)
         if cached_data:
-            return Response(json.loads(cached_data), status=status.HTTP_200_OK)
+            try:
+                parsed_cache = json.loads(cached_data)
+                if isinstance(parsed_cache, dict) and isinstance(parsed_cache.get('patients'), list):
+                    return Response(parsed_cache, status=status.HTTP_200_OK)
+                # Cache may be populated by administration queue (queue key). Ignore and rebuild.
+                if isinstance(parsed_cache, dict) and isinstance(parsed_cache.get('queue'), list):
+                    print("INFO: Ignoring admin queue cache for radiology waitlist.")
+                else:
+                    print("INFO: Ignoring unexpected cache shape for radiology waitlist.")
+            except Exception as e:
+                print(f"Cache parse failed: {e}")
 
         # 2. 캐시 미스: DB 조회
         encounters = Encounter.objects.filter(
-            workflow_state__in=[
-                Encounter.WorkflowState.WAITING_IMAGING,
-                Encounter.WorkflowState.IN_IMAGING,
-            ]
+            doctortoradiologyorder__status__in=['WAITING', 'IN_PROGRESS'],
+            doctortoradiologyorder__encounter__isnull=False,
         ).select_related('patient', 'assigned_doctor')\
          .prefetch_related('doctortoradiologyorder_set')\
+         .distinct()\
          .order_by('state_entered_at')  # FIFO (오래된 순)
 
         # 3. 영상의학과 전용 상세 정보 구성
@@ -575,6 +624,7 @@ class WaitlistView(APIView):
             imaging_orders = enc.doctortoradiologyorder_set.filter(
                 status__in=['WAITING', 'IN_PROGRESS']
             )
+            primary_order = imaging_orders.order_by('ordered_at', 'order_id').first()
 
             orders_info = [
                 {
@@ -597,23 +647,37 @@ class WaitlistView(APIView):
                 patient_id=enc.patient.patient_id,
                 ended_at__isnull=True
             ).order_by('-started_at', '-created_at').first()
-            if not active_study and enc.workflow_state == Encounter.WorkflowState.IN_IMAGING:
+            has_in_progress_order = imaging_orders.filter(status='IN_PROGRESS').exists()
+            if not active_study and has_in_progress_order:
                 now = timezone.now()
                 active_study = DICOMStudy.objects.create(
                     study_uid=pydicom.uid.generate_uid(),
                     patient_id=enc.patient.patient_id,
                     study_datetime=now,
                     started_at=enc.state_entered_at or now,
+                    encounter=enc,
+                    order_id=primary_order.order_id if primary_order else None,
+                    body_part=primary_order.body_part if primary_order else None,
                 )
+
+            order_statuses = [order.status for order in imaging_orders]
+            if 'IN_PROGRESS' in order_statuses:
+                current_status = '촬영중'
+            elif 'WAITING' in order_statuses:
+                current_status = '촬영대기'
+            else:
+                current_status = '촬영대기'
 
             queue_data.append({
                 'encounter_id': enc.encounter_id,
                 'patient_id': enc.patient.patient_id,
                 'patient_name': enc.patient.name,
+                'date_of_birth': enc.patient.date_of_birth.isoformat() if enc.patient.date_of_birth else None,
                 'age': enc.patient.age,
                 'gender': enc.patient.gender,
                 'workflow_state': enc.workflow_state,
                 'workflow_state_display': enc.get_workflow_state_display(),
+                'current_status': current_status,
                 'state_entered_at': enc.state_entered_at.isoformat() if enc.state_entered_at else None,
                 'waiting_minutes': waiting_minutes,
                 'doctor_name': enc.assigned_doctor.name if enc.assigned_doctor else 'N/A',
@@ -622,9 +686,16 @@ class WaitlistView(APIView):
             })
 
         # 통계 정보
+        from doctor.models import DoctorToRadiologyOrder
         stats = {
-            'waiting': cache_manager.get_waiting_count('imaging'),
-            'in_progress': cache_manager.get_in_progress_count('imaging'),
+            'waiting': DoctorToRadiologyOrder.objects.filter(
+                status='WAITING',
+                encounter__isnull=False
+            ).values('encounter_id').distinct().count(),
+            'in_progress': DoctorToRadiologyOrder.objects.filter(
+                status='IN_PROGRESS',
+                encounter__isnull=False
+            ).values('encounter_id').distinct().count(),
         }
 
         response_data = {
@@ -637,7 +708,8 @@ class WaitlistView(APIView):
 
         # 4. Redis 캐싱 (5초)
         try:
-            cache_manager.redis_client.setex(cache_key, 5, json.dumps(response_data))
+            if cache_manager.is_connected():
+                cache_manager.redis_client.setex(cache_key, 5, json.dumps(response_data))
         except Exception as e:
             print(f"Cache write failed: {e}")
 
@@ -650,7 +722,7 @@ class StartFilmingView(APIView):
 
     def post(self, request):
         """
-        Encounter.workflow_state를 'IN_IMAGING'으로 업데이트
+        DoctorToRadiologyOrder.status를 'IN_PROGRESS'로 업데이트
 
         Request Body:
         {
@@ -666,28 +738,25 @@ class StartFilmingView(APIView):
             }, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            encounter = Encounter.objects.filter(
+            from doctor.models import DoctorToRadiologyOrder
+            imaging_order = DoctorToRadiologyOrder.objects.filter(
                 patient__patient_id=patient_id,
-                workflow_state__in=[
-                    Encounter.WorkflowState.WAITING_IMAGING,
-                    Encounter.WorkflowState.IN_IMAGING,
-                ],
-            ).order_by('-state_entered_at').first()
+                status__in=['WAITING', 'IN_PROGRESS']
+            ).select_related('encounter').order_by('-ordered_at', '-order_id').first()
+
+            encounter = imaging_order.encounter if imaging_order else None
 
             if not encounter:
                 return Response({
                     'error': f'Encounter for patient {patient_id} not found'
                 }, status=status.HTTP_404_NOT_FOUND)
 
-            # 상태 업데이트 (통합 메서드 사용 - Redis 자동 업데이트)
-            encounter.transition_to(Encounter.WorkflowState.IN_IMAGING)
-
             # 오더 상태 변경
-            from doctor.models import DoctorToRadiologyOrder
             imaging_orders = DoctorToRadiologyOrder.objects.filter(
                 encounter=encounter,
                 status__in=['WAITING', 'REQUESTED']
             )
+            primary_order = imaging_orders.order_by('ordered_at', 'order_id').first()
             imaging_orders.update(status='IN_PROGRESS')
 
             # 촬영 시작 스터디 생성/재사용
@@ -705,12 +774,18 @@ class StartFilmingView(APIView):
                     patient_id=patient_id,
                     study_datetime=now,
                     started_at=now,
+                    encounter=encounter,
+                    order_id=primary_order.order_id if primary_order else None,
+                    body_part=primary_order.body_part if primary_order else None,
                 )
             else:
                 study_uid = active_study.study_uid
 
             # 캐시 무효화
             from administration.cache_manager import cache_manager
+            if cache_manager.is_connected():
+                cache_manager.sync_counts_from_db()
+                cache_manager.refresh_waiting_queue_cache()
             cache_manager.redis_client.delete('waiting_queue_list:imaging')
 
             # WebSocket 알림
@@ -740,12 +815,12 @@ class StartFilmingView(APIView):
 
 
 class EndFilmingView(APIView):
-    """환자 촬영 종료 API - 환자 상태를 '촬영완료'로 변경"""
+    """환자 촬영 종료 API - 환자 상태를 '결과대기'로 변경"""
     permission_classes = [AllowAny]  # TODO: 나중에 IsRadiologist로 변경 필요
 
     def post(self, request):
         """
-        Encounter.workflow_state를 'COMPLETED'로 업데이트
+        DoctorToRadiologyOrder.status를 'COMPLETED'로 업데이트
 
         Request Body:
         {
@@ -761,97 +836,130 @@ class EndFilmingView(APIView):
             }, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            encounter = Encounter.objects.filter(
-                patient__patient_id=patient_id,
-                workflow_state__in=[
-                    Encounter.WorkflowState.WAITING_IMAGING,
-                    Encounter.WorkflowState.IN_IMAGING,
-                ],
-            ).order_by('-state_entered_at').first()
+            from doctor.models import DoctorToRadiologyOrder
 
-            if not encounter:
-                return Response({
-                    'error': f'Encounter for patient {patient_id} not found'
-                }, status=status.HTTP_404_NOT_FOUND)
+            with transaction.atomic():
+                created_radiology_request = False
+                imaging_order = DoctorToRadiologyOrder.objects.filter(
+                    patient__patient_id=patient_id,
+                    status='IN_PROGRESS'
+                ).select_related('encounter').order_by('-ordered_at', '-order_id').first()
+                encounter = imaging_order.encounter if imaging_order else None
 
-            # 오더 완료 처리
-            from doctor.models import DoctorToRadiologyOrder, LabOrder
-            imaging_orders = DoctorToRadiologyOrder.objects.filter(
-                encounter=encounter,
-                status='IN_PROGRESS'
-            )
-            imaging_orders.update(status='COMPLETED')
+                if not encounter:
+                    return Response({
+                        'error': f'Encounter for patient {patient_id} not found'
+                    }, status=status.HTTP_404_NOT_FOUND)
 
-            # 촬영 종료 스터디 종료 시간 기록
-            study_qs = DICOMStudy.objects.filter(patient_id=patient_id, ended_at__isnull=True)
-            if study_uid:
-                study_qs = study_qs.filter(study_uid=study_uid)
-            active_study = study_qs.order_by('-started_at', '-created_at').first()
-            if active_study:
-                now = timezone.now()
-                active_study.ended_at = now
-                if not active_study.post_processing_started_at:
-                    active_study.post_processing_started_at = now
-                active_study.save(update_fields=['ended_at', 'post_processing_started_at'])
+                # 오더 완료 처리
+                imaging_orders = DoctorToRadiologyOrder.objects.filter(
+                    encounter=encounter,
+                    status='IN_PROGRESS'
+                )
+                imaging_orders.update(status='COMPLETED')
 
-            # **FIX**: 촬영 완료 후 다음 단계 결정
-            # 1. 다른 IMAGING 오더(WAITING 상태)가 남아있는지 확인
-            has_waiting_imaging = DoctorToRadiologyOrder.objects.filter(
-                encounter=encounter,
-                status='WAITING'
-            ).exists()
+                # 영상의학과 -> 의사 오더 생성 (촬영 종료 알림)
+                try:
+                    from radiology.models import RadiologyToDoctorOrder, Radiology
+                    primary_order = DoctorToRadiologyOrder.objects.filter(
+                        encounter=encounter
+                    ).order_by('ordered_at', 'order_id').first()
 
-            # 2. REQUESTED 상태 오더가 있는지 확인 (아직 접수 안 된 오더)
-            has_requested_orders = (
-                LabOrder.objects.filter(encounter=encounter, status='REQUESTED').exists() or
-                DoctorToRadiologyOrder.objects.filter(encounter=encounter, status='REQUESTED').exists()
-            )
+                    target_doctor = encounter.assigned_doctor or (primary_order.doctor if primary_order else None)
 
-            if has_waiting_imaging:
-                # 다른 촬영 오더(접수 완료)가 남아있으면 촬영 대기로 유지
-                encounter.transition_to(Encounter.WorkflowState.WAITING_IMAGING)
-                print(f"INFO: 촬영 완료했지만 다른 IMAGING 오더 대기 중: {encounter.encounter_id}")
-            elif has_requested_orders:
-                # 아직 접수 안 된 오더가 있으면 원무과로 복귀
-                encounter.transition_to(Encounter.WorkflowState.REGISTERED)
-                print(f"INFO: 촬영 완료 후 미접수 오더 있음 → 원무과 복귀: {encounter.encounter_id}")
-            else:
-                # 모든 오더 완료 → 결과 대기 (환자 귀가)
-                encounter.transition_to(Encounter.WorkflowState.WAITING_RESULTS)
-                print(f"INFO: 모든 촬영 완료 → 결과 대기: {encounter.encounter_id}")
+                    radiologist = None
+                    if getattr(request, 'user', None) and request.user.is_authenticated:
+                        radiologist = Radiology.objects.filter(user=request.user).first()
+                    if not radiologist:
+                        radiologist = Radiology.objects.order_by('radiologic_id').first()
 
-            # 캐시 무효화 (상태에 따라 적절한 캐시 삭제)
-            from administration.cache_manager import cache_manager
-            cache_manager.redis_client.delete('waiting_queue_list:imaging')
+                    if target_doctor and radiologist:
+                        exists = RadiologyToDoctorOrder.objects.filter(
+                            encounter=encounter,
+                            status=RadiologyToDoctorOrder.OrderStatus.REQUESTED
+                        ).exists()
+                        if not exists:
+                            RadiologyToDoctorOrder.objects.create(
+                                message='촬영이 종료되었습니다. 판독/확인을 진행해주세요.',
+                                priority='ROUTINE',
+                                status=RadiologyToDoctorOrder.OrderStatus.REQUESTED,
+                                radiologist=radiologist,
+                                doctor=target_doctor,
+                                patient=encounter.patient,
+                                encounter=encounter
+                            )
+                            created_radiology_request = True
+                except Exception as exc:
+                    print(f"RadiologyToDoctorOrder create failed: {exc}")
 
-            if encounter.workflow_state == Encounter.WorkflowState.WAITING_RESULTS:
-                # 결과대기는 clinic queue에도 포함
-                cache_manager.redis_client.delete('waiting_queue_list:clinic')
-            elif encounter.workflow_state == Encounter.WorkflowState.REGISTERED:
-                # 원무과로 복귀한 경우 admin queue 무효화
-                cache_manager.redis_client.delete('waiting_queue_list:admin')
+                # 촬영 종료 스터디 종료 시간 기록
+                study_qs = DICOMStudy.objects.filter(patient_id=patient_id, ended_at__isnull=True)
+                if study_uid:
+                    study_qs = study_qs.filter(study_uid=study_uid)
+                active_study = study_qs.order_by('-started_at', '-created_at').first()
+                if active_study:
+                    now = timezone.now()
+                    active_study.ended_at = now
+                    if not active_study.post_processing_started_at:
+                        active_study.post_processing_started_at = now
+                    active_study.save(update_fields=['ended_at', 'post_processing_started_at'])
 
-            # WebSocket 알림 (상태에 맞는 메시지 전송)
-            from administration.views import send_queue_update_websocket
+                # 촬영 종료 후에는 오더 처리 상태 유지 (소켓은 커밋 후 1회 전송)
+                if encounter.workflow_state != Encounter.WorkflowState.WAITING_ORDER:
+                    encounter.workflow_state = Encounter.WorkflowState.WAITING_ORDER
+                    encounter.status = Encounter.Status.IN_PROGRESS
+                    encounter.state_entered_at = timezone.now()
+                    encounter.save(update_fields=['workflow_state', 'status', 'state_entered_at'])
 
-            if encounter.workflow_state == Encounter.WorkflowState.WAITING_IMAGING:
-                ws_message = f"촬영 완료: {encounter.patient.name} (다른 촬영 대기)"
-                response_message = '촬영이 종료되었습니다. 다른 촬영 오더가 대기 중입니다.'
-            elif encounter.workflow_state == Encounter.WorkflowState.REGISTERED:
-                ws_message = f"촬영 완료: {encounter.patient.name} (원무과 복귀 - 미접수 오더 있음)"
-                response_message = '촬영이 종료되었습니다. 접수되지 않은 오더가 있어 원무과로 복귀합니다.'
-            else:  # WAITING_RESULTS
-                ws_message = f"촬영 완료: {encounter.patient.name} (결과 대기 - 귀가 가능)"
-                response_message = '촬영이 종료되었습니다. 모든 검사가 완료되어 결과 대기 중입니다. 환자 귀가 가능합니다.'
+                response_message = '촬영이 종료되었습니다. 오더 처리 상태를 유지합니다.'
 
-            send_queue_update_websocket(
-                message=ws_message,
-                extra_data={
-                    "queue_type": "imaging",
-                    "imaging_waiting": cache_manager.get_waiting_count('imaging'),
-                    "imaging_in_progress": cache_manager.get_in_progress_count('imaging'),
-                }
-            )
+                patient_name = encounter.patient.name if encounter.patient else '환자'
+
+                def _after_commit():
+                    # 캐시 갱신 (DB 커밋 이후)
+                    from administration.cache_manager import cache_manager
+                    if cache_manager.is_connected():
+                        cache_manager.sync_counts_from_db()
+                        cache_manager.refresh_waiting_queue_cache()
+                        cache_manager.redis_client.delete('waiting_queue_list:imaging')
+                        # 결과대기는 clinic queue에도 포함
+                        cache_manager.redis_client.delete('waiting_queue_list:clinic')
+
+                    # Radiology -> Doctor 오더 생성 시 원무과 오더관리 갱신 트리거
+                    if created_radiology_request:
+                        try:
+                            from channels.layers import get_channel_layer
+                            from asgiref.sync import async_to_sync
+                            channel_layer = get_channel_layer()
+                            async_to_sync(channel_layer.group_send)(
+                                "admin_dashboard",
+                                {
+                                    "type": "new_order",
+                                    "message": f"촬영 종료 오더가 도착했습니다: {patient_name}",
+                                    "data": {
+                                        "order_type": "RADIOLOGY_REQUEST",
+                                        "patient_id": encounter.patient.patient_id if encounter.patient else None,
+                                        "encounter_id": encounter.encounter_id,
+                                    }
+                                }
+                            )
+                        except Exception as wse:
+                            print(f"WebSocket send failed: {wse}")
+
+                    # WebSocket 알림 (영상의학과/원무과로 1회 전송)
+                    from administration.views import send_queue_update_websocket
+                    send_queue_update_websocket(
+                        message=f"촬영 완료: {patient_name}",
+                        extra_data={
+                            "queue_type": "imaging",
+                            "imaging_waiting": cache_manager.get_waiting_count('imaging'),
+                            "imaging_in_progress": cache_manager.get_in_progress_count('imaging'),
+                        },
+                        target_groups=["admin_dashboard", "radiology_dashboard"],
+                        refresh_cache=False
+                    )
+
+                transaction.on_commit(_after_commit)
 
             # 업데이트된 환자 정보 직렬화
             serializer = EncounterWaitlistSerializer(encounter)
@@ -917,45 +1025,49 @@ class ImagingStatsView(APIView):
         today = timezone.localdate()
         now = timezone.now()
 
-        # Redis 실시간 카운터
-        waiting_count = cache_manager.get_waiting_count('imaging')
-        in_progress_count = cache_manager.get_in_progress_count('imaging')
+        from doctor.models import DoctorToRadiologyOrder
+
+        # 현재 촬영 대기/진행 카운트 (오더 기준, 중복 Encounter 제거)
+        waiting_count = DoctorToRadiologyOrder.objects.filter(
+            status='WAITING',
+            encounter__isnull=False
+        ).values('encounter_id').distinct().count()
+        in_progress_count = DoctorToRadiologyOrder.objects.filter(
+            status='IN_PROGRESS',
+            encounter__isnull=False
+        ).values('encounter_id').distinct().count()
 
         # 오늘 촬영 완료 건수
-        from doctor.models import DoctorToRadiologyOrder
         today_completed = DoctorToRadiologyOrder.objects.filter(
             status='COMPLETED',
             ordered_at__date=today
         ).count()
 
-        # 현재 대기 중인 환자들의 평균 대기 시간
-        waiting_encounters = Encounter.objects.filter(
-            workflow_state=Encounter.WorkflowState.WAITING_IMAGING
+        # 현재 대기 중인 오더들의 평균 대기 시간 (ordered_at 기준)
+        waiting_orders = DoctorToRadiologyOrder.objects.filter(
+            status='WAITING',
+            ordered_at__isnull=False
         )
-
-        if waiting_encounters.exists():
+        if waiting_orders.exists():
             total_waiting_seconds = sum([
-                (now - enc.state_entered_at).total_seconds()
-                for enc in waiting_encounters
-                if enc.state_entered_at
+                (now - order.ordered_at).total_seconds()
+                for order in waiting_orders
             ])
-            avg_waiting_minutes = int(total_waiting_seconds / 60 / waiting_encounters.count())
+            avg_waiting_minutes = int(total_waiting_seconds / 60 / waiting_orders.count())
         else:
             avg_waiting_minutes = 0
 
-        # 오늘 촬영 중인 환자들의 평균 촬영 시간
-        today_imaging = Encounter.objects.filter(
-            workflow_state=Encounter.WorkflowState.IN_IMAGING,
-            state_entered_at__date=today
+        # 촬영 중 평균 시간 (ordered_at 기준)
+        in_progress_orders = DoctorToRadiologyOrder.objects.filter(
+            status='IN_PROGRESS',
+            ordered_at__isnull=False
         )
-
-        if today_imaging.exists():
+        if in_progress_orders.exists():
             total_imaging_seconds = sum([
-                (now - enc.state_entered_at).total_seconds()
-                for enc in today_imaging
-                if enc.state_entered_at
+                (now - order.ordered_at).total_seconds()
+                for order in in_progress_orders
             ])
-            avg_imaging_minutes = int(total_imaging_seconds / 60 / today_imaging.count())
+            avg_imaging_minutes = int(total_imaging_seconds / 60 / in_progress_orders.count())
         else:
             avg_imaging_minutes = 0
 

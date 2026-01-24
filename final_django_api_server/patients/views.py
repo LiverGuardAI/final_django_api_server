@@ -1727,7 +1727,7 @@ def get_queue_status(request):
         }, status=status.HTTP_200_OK)
 
     # 3. 현재 활성 Encounter 조회 (진료대기 또는 진료중)
-    active_states = ['WAITING_CLINIC', 'IN_CLINIC']
+    active_states = ['WAITING_CLINIC', 'WAITING_ADDITIONAL_CLINIC', 'IN_CLINIC']
     my_encounter = Encounter.objects.filter(
         patient=patient,
         workflow_state__in=active_states
@@ -1756,13 +1756,13 @@ def get_queue_status(request):
         # 대기중인 환자 수 (자신 포함)
         total_waiting_count = Encounter.objects.filter(
             assigned_doctor=doctor,
-            workflow_state='WAITING_CLINIC'
+            workflow_state__in=['WAITING_CLINIC', 'WAITING_ADDITIONAL_CLINIC']
         ).count()
 
         # 내 앞에 대기중인 환자 수 (나보다 먼저 대기열에 들어온 환자)
         waiting_before_me = Encounter.objects.filter(
             assigned_doctor=doctor,
-            workflow_state='WAITING_CLINIC',
+            workflow_state__in=['WAITING_CLINIC', 'WAITING_ADDITIONAL_CLINIC'],
             created_at__lt=my_encounter.created_at
         ).count()
 

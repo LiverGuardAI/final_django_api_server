@@ -39,6 +39,7 @@ def _extract_dicom_tags_from_dataset(dataset) -> dict:
         'StudyInstanceUID': get_value('StudyInstanceUID'),
         'SeriesInstanceUID': get_value('SeriesInstanceUID'),
         'Modality': get_value('Modality'),
+        'BodyPartExamined': get_value('BodyPartExamined'),
         'StudyDescription': get_value('StudyDescription'),
         'InstitutionName': get_value('InstitutionName'),
         'SeriesNumber': get_value('SeriesNumber'),
@@ -95,9 +96,25 @@ def _get_or_create_study(
     study_uid = tags.get('StudyInstanceUID')
     if not study_uid:
         return None
+    try:
+        from doctor.models import Encounter, DoctorToRadiologyOrder
+        order = DoctorToRadiologyOrder.objects.filter(
+            patient_id=patient_id,
+            status__in=['WAITING', 'IN_PROGRESS', 'REQUESTED'],
+            encounter__isnull=False,
+        ).select_related('encounter').order_by('ordered_at', 'order_id').first()
+        encounter = order.encounter if order else None
+    except Exception as exc:
+        print(f"Failed to resolve encounter/order for study: {exc}")
+        encounter = None
+        order = None
     defaults = {
         'patient_id': patient_id,
         'modality': tags.get('Modality'),
+        'body_part': order.body_part if order and order.body_part else tags.get('BodyPartExamined'),
+        'order_id': order.order_id if order else None,
+        'encounter': encounter,
+        'started_at': encounter.state_entered_at if encounter else None,
         'study_description': tags.get('StudyDescription'),
         'institution_name': tags.get('InstitutionName'),
         'study_datetime': timezone.now(),

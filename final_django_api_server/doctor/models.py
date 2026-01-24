@@ -123,7 +123,9 @@ class Encounter(models.Model):
         """상세 워크플로우 상태"""
         REQUESTED = 'REQUESTED', '요청됨'
         REGISTERED = 'REGISTERED', '접수완료'
+        WAITING_ORDER = 'WAITING_ORDER', '오더중'
         WAITING_CLINIC = 'WAITING_CLINIC', '진료대기'
+        WAITING_ADDITIONAL_CLINIC = 'WAITING_ADDITIONAL_CLINIC', '추가진료대기'
         IN_CLINIC = 'IN_CLINIC', '진료중'
         WAITING_RESULTS = 'WAITING_RESULTS', '결과대기'
         WAITING_IMAGING = 'WAITING_IMAGING', '촬영대기'
@@ -205,9 +207,10 @@ class Encounter(models.Model):
         # 3. FHIR Status 매핑
         if new_state in [self.WorkflowState.REQUESTED, self.WorkflowState.REGISTERED]:
             self.status = self.Status.PLANNED
-        elif new_state in [self.WorkflowState.WAITING_CLINIC, self.WorkflowState.IN_CLINIC,
+        elif new_state in [self.WorkflowState.WAITING_CLINIC, self.WorkflowState.WAITING_ADDITIONAL_CLINIC, self.WorkflowState.IN_CLINIC,
                            self.WorkflowState.WAITING_IMAGING, self.WorkflowState.IN_IMAGING,
-                           self.WorkflowState.WAITING_RESULTS, self.WorkflowState.WAITING_PAYMENT]:
+                           self.WorkflowState.WAITING_RESULTS, self.WorkflowState.WAITING_PAYMENT,
+                           self.WorkflowState.WAITING_ORDER]:
             self.status = self.Status.IN_PROGRESS
         elif new_state == self.WorkflowState.COMPLETED:
             self.status = self.Status.COMPLETED
@@ -227,13 +230,24 @@ class Encounter(models.Model):
         # 4. Redis Cache 업데이트 (상태 변화에 따른 카운트 조정)
         try:
             # === 진료 대기열 (Clinic) ===
+            clinic_waiting_states = [
+                self.WorkflowState.WAITING_CLINIC,
+                self.WorkflowState.WAITING_ADDITIONAL_CLINIC,
+            ]
+
             # 진료 대기 -> 진료 중
-            if old_state == self.WorkflowState.WAITING_CLINIC and new_state == self.WorkflowState.IN_CLINIC:
+            if old_state in clinic_waiting_states and new_state == self.WorkflowState.IN_CLINIC:
                 cache_manager.decrement_waiting_count('clinic')
                 cache_manager.increment_in_progress_count('clinic')
             # 진료 중 -> 완료 (또는 수납대기/결과대기 등으로 나감)
             elif old_state == self.WorkflowState.IN_CLINIC and new_state != self.WorkflowState.IN_CLINIC:
                 cache_manager.decrement_in_progress_count('clinic')
+
+            # 진료 대기 상태 변경 (대기 진입/이탈)
+            if old_state in clinic_waiting_states and new_state not in clinic_waiting_states and new_state != self.WorkflowState.IN_CLINIC:
+                cache_manager.decrement_waiting_count('clinic')
+            if new_state in clinic_waiting_states and old_state not in clinic_waiting_states:
+                cache_manager.increment_waiting_count('clinic')
 
             # === 영상의학과 대기열 (Imaging) ===
             # 이전 상태가 촬영 대기였다면 카운트 감소
@@ -255,18 +269,35 @@ class Encounter(models.Model):
             from asgiref.sync import async_to_sync
             
             channel_layer = get_channel_layer()
-            async_to_sync(channel_layer.group_send)(
-                'clinic_dashboard',
-                {
-                    'type': 'update_queue',
-                    'message': 'Encounter status changed',
-                    'data': {
-                        'encounter_id': self.encounter_id,
-                        'old_state': old_state,
-                        'new_state': new_state
+            # 대기열 캐시 갱신 (Redis)
+            if cache_manager.is_connected():
+                cache_manager.refresh_waiting_queue_cache()
+
+            # 진료 완료(수납/결과 대기 전환)는 원무과 + 담당 의사(개인 그룹)만 알림
+            if new_state in [self.WorkflowState.WAITING_RESULTS, self.WorkflowState.WAITING_PAYMENT]:
+                target_groups = ['admin_dashboard']
+                if self.assigned_doctor and getattr(self.assigned_doctor, 'user_id', None):
+                    target_groups.append(f"user_{self.assigned_doctor.user_id}")
+            else:
+                target_groups = [
+                    'clinic_dashboard',
+                    'doctor_dashboard',
+                    'admin_dashboard',
+                    'radiology_dashboard',
+                ]
+            for group in target_groups:
+                async_to_sync(channel_layer.group_send)(
+                    group,
+                    {
+                        'type': 'update_queue',
+                        'message': 'Encounter status changed',
+                        'data': {
+                            'encounter_id': self.encounter_id,
+                            'old_state': old_state,
+                            'new_state': new_state
+                        }
                     }
-                }
-            )
+                )
 
         except Exception as e:
             print(f"Redis/WebSocket update failed: {e}")

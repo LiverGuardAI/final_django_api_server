@@ -31,7 +31,10 @@ class DoctorDashboardView(APIView):
 
         # 진료실 대기 환자 (WAITING_CLINIC만)
         clinic_waiting = Encounter.objects.filter(
-            workflow_state=Encounter.WorkflowState.WAITING_CLINIC
+            workflow_state__in=[
+                Encounter.WorkflowState.WAITING_CLINIC,
+                Encounter.WorkflowState.WAITING_ADDITIONAL_CLINIC
+            ]
         ).count()
 
         # 진료 중 환자 (IN_CLINIC만)
@@ -45,6 +48,7 @@ class DoctorDashboardView(APIView):
         post_clinic_states = [
             Encounter.WorkflowState.WAITING_PAYMENT,
             Encounter.WorkflowState.WAITING_RESULTS,
+            Encounter.WorkflowState.WAITING_ORDER,
             Encounter.WorkflowState.WAITING_IMAGING,
             Encounter.WorkflowState.IN_IMAGING,
         ]
@@ -218,7 +222,10 @@ class QueueListView(APIView):
                 base_qs = base_qs.filter(assigned_doctor_id=doctor_id)
 
             waiting_count = base_qs.filter(
-                workflow_state=Encounter.WorkflowState.WAITING_CLINIC
+                workflow_state__in=[
+                    Encounter.WorkflowState.WAITING_CLINIC,
+                    Encounter.WorkflowState.WAITING_ADDITIONAL_CLINIC
+                ]
             ).count()
 
             in_progress_count = base_qs.filter(
@@ -909,7 +916,15 @@ class CreateLabOrderView(APIView):
 
             serializer = CreateLabOrderSerializer(data=data)
             if serializer.is_valid():
-                serializer.save()
+                order = serializer.save()
+                encounter_id = data.get('encounter')
+                if encounter_id:
+                    try:
+                        encounter = Encounter.objects.get(encounter_id=encounter_id)
+                        if encounter.workflow_state not in [Encounter.WorkflowState.COMPLETED, Encounter.WorkflowState.CANCELLED]:
+                            encounter.transition_to(Encounter.WorkflowState.WAITING_ORDER)
+                    except Encounter.DoesNotExist:
+                        pass
             
                 # WebSocket 알림 전송 (관리자에게)
                 try:
@@ -964,7 +979,15 @@ class CreateDoctorToRadiologyOrderView(APIView):
 
             serializer = CreateDoctorToRadiologyOrderSerializer(data=data)
             if serializer.is_valid():
-                serializer.save()
+                order = serializer.save()
+                encounter_id = data.get('encounter')
+                if encounter_id:
+                    try:
+                        encounter = Encounter.objects.get(encounter_id=encounter_id)
+                        if encounter.workflow_state not in [Encounter.WorkflowState.COMPLETED, Encounter.WorkflowState.CANCELLED]:
+                            encounter.transition_to(Encounter.WorkflowState.WAITING_ORDER)
+                    except Encounter.DoesNotExist:
+                        pass
 
                 # WebSocket 알림 전송 (관리자에게)
                 try:

@@ -45,6 +45,15 @@ class EncounterWaitlistSerializer(serializers.ModelSerializer):
         ]
 
     def get_current_status(self, obj):
+        orders = getattr(obj, 'doctortoradiologyorder_set', None)
+        if orders is not None:
+            statuses = {order.status for order in orders.all()}
+            if 'IN_PROGRESS' in statuses:
+                return '촬영중'
+            if 'WAITING' in statuses or 'REQUESTED' in statuses:
+                return '촬영대기'
+            if 'COMPLETED' in statuses:
+                return '촬영완료'
         mapping = {
             Encounter.WorkflowState.WAITING_IMAGING: '촬영대기중',
             Encounter.WorkflowState.IN_IMAGING: '촬영중',

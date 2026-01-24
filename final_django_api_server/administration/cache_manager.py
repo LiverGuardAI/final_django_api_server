@@ -253,6 +253,86 @@ class RedisCacheManager:
     # 유틸리티
     # ========================================
 
+    def build_waiting_queue_data(self, doctor_id=None, max_count=50):
+        """
+        대기열 데이터를 DB에서 조회해서 반환 (Redis 미사용)
+        """
+        from doctor.models import Encounter
+        from administration.serializers import EncounterSerializer
+        from django.db.models import Q
+        from django.utils import timezone
+
+        # 기본 대기열 상태: 대기중, 진료중, 추가진료대기, 결과대기, 수납대기, 오더중
+        filter_condition = Q(workflow_state__in=[
+            Encounter.WorkflowState.WAITING_CLINIC,
+            Encounter.WorkflowState.WAITING_ADDITIONAL_CLINIC,
+            Encounter.WorkflowState.IN_CLINIC,
+            Encounter.WorkflowState.WAITING_RESULTS,
+            Encounter.WorkflowState.WAITING_PAYMENT,
+            Encounter.WorkflowState.WAITING_ORDER,
+            Encounter.WorkflowState.WAITING_IMAGING,
+            Encounter.WorkflowState.IN_IMAGING
+        ])
+
+        # 오늘 완료된 진료는 항상 포함
+        today = timezone.localdate()
+        filter_condition = filter_condition | Q(
+            workflow_state=Encounter.WorkflowState.COMPLETED,
+            updated_at__date=today
+        )
+
+        queryset = Encounter.objects.filter(filter_condition)\
+            .select_related('patient', 'assigned_doctor')\
+            .prefetch_related(
+                'medical_records',
+                'laborder_set',
+                'doctortoradiologyorder_set',
+                'questionnaire'
+            )\
+            .order_by('state_entered_at')
+
+        if doctor_id:
+            try:
+                queryset = queryset.filter(assigned_doctor_id=int(doctor_id))
+            except ValueError:
+                pass
+
+        waiting_encounters = queryset[:max_count]
+        serializer = EncounterSerializer(waiting_encounters, many=True)
+        return serializer.data
+
+    def refresh_waiting_queue_cache(self, doctor_id=None, max_count=50, ttl=30):
+        """
+        대기열 데이터를 DB에서 새로 만들고 Redis에 저장
+        """
+        if not self.is_connected():
+            return None
+
+        from django.core.serializers.json import DjangoJSONEncoder
+
+        queue_data = self.build_waiting_queue_data(doctor_id=doctor_id, max_count=max_count)
+
+        if doctor_id:
+            cache_key = f'waiting_queue_list:doctor_{doctor_id}'
+        else:
+            cache_key = 'waiting_queue_list:all'
+
+        self.redis_client.setex(cache_key, ttl, json.dumps(queue_data, cls=DjangoJSONEncoder))
+        return queue_data
+
+    def invalidate_waiting_queue_cache(self):
+        """대기열 캐시 전체 무효화"""
+        if not self.is_connected():
+            return
+
+        keys_to_delete = ['waiting_queue_list', 'waiting_queue_list:all']
+        for key in keys_to_delete:
+            self.redis_client.delete(key)
+
+        # doctor-specific caches
+        for key in self.redis_client.scan_iter('waiting_queue_list:doctor_*'):
+            self.redis_client.delete(key)
+
     def clear_all_stats(self):
         """모든 통계 초기화 (테스트용)"""
         if not self.is_connected():
@@ -273,11 +353,14 @@ class RedisCacheManager:
         if not self.is_connected():
             return
 
-        from doctor.models import Encounter
+        from doctor.models import Encounter, DoctorToRadiologyOrder
 
         # 진료 대기
         clinic_waiting = Encounter.objects.filter(
-            workflow_state=Encounter.WorkflowState.WAITING_CLINIC
+            workflow_state__in=[
+                Encounter.WorkflowState.WAITING_CLINIC,
+                Encounter.WorkflowState.WAITING_ADDITIONAL_CLINIC,
+            ]
         ).count()
         self.set_waiting_count(clinic_waiting, 'clinic')
 
@@ -287,16 +370,18 @@ class RedisCacheManager:
         ).count()
         self.redis_client.set('clinic:in_progress_count', clinic_in_progress)
 
-        # 촬영 대기
-        imaging_waiting = Encounter.objects.filter(
-            workflow_state=Encounter.WorkflowState.WAITING_IMAGING
-        ).count()
+        # 촬영 대기 (오더 기준)
+        imaging_waiting = DoctorToRadiologyOrder.objects.filter(
+            status='WAITING',
+            encounter__isnull=False
+        ).values('encounter_id').distinct().count()
         self.set_waiting_count(imaging_waiting, 'imaging')
 
-        # 촬영 중
-        imaging_in_progress = Encounter.objects.filter(
-            workflow_state=Encounter.WorkflowState.IN_IMAGING
-        ).count()
+        # 촬영 중 (오더 기준)
+        imaging_in_progress = DoctorToRadiologyOrder.objects.filter(
+            status='IN_PROGRESS',
+            encounter__isnull=False
+        ).values('encounter_id').distinct().count()
         self.redis_client.set('imaging:in_progress_count', imaging_in_progress)
 
         print(f"[OK] Redis synced - Clinic waiting: {clinic_waiting}, in progress: {clinic_in_progress}, "
