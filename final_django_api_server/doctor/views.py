@@ -20,6 +20,7 @@ from django.db.models import Q, F
 from channels.layers import get_channel_layer
 from asgiref.sync import async_to_sync
 from administration.cache_manager import cache_manager
+from services.report_lmstudio import generate_lmstudio_report
 
 
 class DoctorDashboardView(APIView):
@@ -1104,3 +1105,106 @@ class AnnouncementDetailView(APIView):
             return Response({'error': '공지사항을 찾을 수 없습니다.'}, status=status.HTTP_404_NOT_FOUND)
         except Exception as e:
             return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+# ============================================================
+# [통합 분석 LLM] 혈액 검사 + 유전체 변이 데이터 종합 분석
+# ============================================================
+
+class IntegratedLLMAnalysisView(APIView):
+    """
+    MedGemma를 활용한 통합 임상 분석 API
+    - 혈액 검사 데이터 + 유전체 변이 패턴 → 심층 해석 + 치료 권고안 생성
+    """
+    permission_classes = [IsAuthenticated] 
+
+    def post(self, request):
+        patient_id = request.data.get('patient_id')
+        if not patient_id:
+            return Response({'error': 'patient_id가 필요합니다.'}, status=400)
+
+        try:
+            # 1. 환자의 최근 혈액 검사 데이터
+            lab_info = {}
+            last_lab = LabResult.objects.filter(patient_id=patient_id).order_by('-test_date').first()
+            if last_lab:
+                lab_info = {
+                    "test_date": str(last_lab.test_date) if last_lab.test_date else None,
+                    "AFP": float(last_lab.afp) if last_lab.afp else None,
+                    "Albumin": float(last_lab.albumin) if last_lab.albumin else None,
+                    "Bilirubin_Total": float(last_lab.bilirubin_total) if last_lab.bilirubin_total else None,
+                    "Platelet": float(last_lab.platelet) if last_lab.platelet else None,
+                    "PT_INR": float(last_lab.pt_inr) if last_lab.pt_inr else None,
+                    "Creatinine": float(last_lab.creatinine) if last_lab.creatinine else None,
+                    "MELD_Score": float(last_lab.meld_score) if last_lab.meld_score else None,
+                    "Child_Pugh_Class": last_lab.child_pugh_class,
+                    "ALBI_Score": float(last_lab.albi_score) if last_lab.albi_score else None,
+                    "ALBI_Grade": last_lab.albi_grade,
+                }
+
+            # 2. 환자의 유전체 변이 데이터 (pathway_scores가 JSONField)
+            genomic_info = {}
+            last_genomic = GenomicData.objects.filter(patient_id=patient_id).order_by('-created_at').first()
+            if last_genomic and last_genomic.pathway_scores:
+                genomic_info = last_genomic.pathway_scores
+
+            # 3. 데이터 없으면 에러
+            if not lab_info and not genomic_info:
+                return Response({'error': '분석할 환자의 임상 데이터가 없습니다.'}, status=404)
+
+            # 4. LLM에 보낼 데이터 구성
+            combined_payload = {
+                "patient_id": patient_id,
+                "blood_test": lab_info,
+                "genomic_pathways": genomic_info
+            }
+
+            # 5. 시스템 프롬프트 (통합 분석용)
+            system_prompt = """
+당신은 간세포암(HCC) 전문의를 보조하는 AI 임상 분석가입니다.
+제공된 임상 데이터를 바탕으로, 의료진 간 커뮤니케이션에 적합한 **[간 종양 통합 소견서]**를 작성하시오.
+
+[작성 원칙]
+1. **서식:** 리스트 불릿(*)이나 마크다운 볼드체(**)를 사용하지 마시오. 일반 텍스트와 하이픈(-)만 사용하여 깔끔하게 작성하시오.
+2. **간결성:** 정상 범위 설명이나 사전적 정의 배제. 핵심 소견만 명확히 기술하시오.
+3. **전문성:** '중간 정도' 같은 모호한 표현을 피하고, '고위험군', '저위험군', '재발 위험군' 등 명확한 임상 용어를 사용하여 서술하시오.
+4. **직접 작성:** 가이드용 예시 문구나 대괄호([])를 그대로 베껴 쓰지 말고, 실제 환자 데이터에 기반한 분석 내용으로 문장을 완성하시오.
+
+[출력 양식]
+
+간 종양 통합 소견서
+
+1. 주요 임상 소견
+
+- 간 기능 : (예: Child-Pugh A 및 ALBI Grade 1로 간 예비능 양호함. 단, MELD 점수 고려 시 주의 요망.)
+- 종양 표지자 : (예: AFP 12.5 ng/mL로 경미한 상승 소견 보임.)
+
+2. 유전체 변이 해석
+
+- (활성화 점수가 높은 상위 3개 경로만 선택하여 기술)
+- 경로명 (Score 점수) : (임상적 의미 한 줄 요약. 예: 종양의 공격적인 증식 및 대사 활성 시사.)
+
+3. 종합 평가
+
+(이곳에는 템플릿 문구를 사용하지 마시오. 간 기능 상태와 유전체 변이 특성을 종합하여, 환자의 예후 및 재발 위험도를 전문의 소견 형태로 직접 명확하게 서술하시오.)
+
+4. 제언 (Plan)
+
+추가 검사 :
+- (꼭 필요한 검사명만 나열)
+치료 전략 :
+- (환자 상태에 적합한 치료법 및 추적 관찰 계획 제안)
+
+※ 참고 : 본 소견서는 AI 보조 도구에 의해 생성되었으며, 최종 임상 판단은 담당 의료진이 수행해야 합니다.
+"""
+
+            # 6. 기존 팀원이 만든 LM Studio 서비스 호출
+            report_text = generate_lmstudio_report(
+                payload=combined_payload,
+                system_content=system_prompt
+            )
+
+            return Response({"report": report_text})
+
+        except Exception as e:
+            return Response({"error": str(e)}, status=500)

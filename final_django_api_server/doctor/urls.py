@@ -6,7 +6,7 @@ from .views import (
     DoctorInfoView, DoctorMedicalRecordListView, CreateLabOrderView, CreateDoctorToRadiologyOrderView,
     PatientCTSeriesView, PatientGenomicDataView, PatientLabOrdersView, PatientProfileView,
     AnnouncementListView, AnnouncementDetailView, ScheduleDoctorListView, ScheduleDoctorDetailView,
-    PatientQuestionnaireHistoryView, PatientVitalHistoryView, MedicalRecordSaveView
+    PatientQuestionnaireHistoryView, PatientVitalHistoryView, MedicalRecordSaveView, IntegratedLLMAnalysisView
 )
 
 urlpatterns = [
@@ -37,4 +37,7 @@ urlpatterns = [
     path('announcements/<int:announcement_id>/', AnnouncementDetailView.as_view(), name='announcement_detail'),
     path('personal-schedules/', ScheduleDoctorListView.as_view(), name='personal_schedule_list'),
     path('personal-schedules/<int:schedule_id>/', ScheduleDoctorDetailView.as_view(), name='personal_schedule_detail'),
+
+    # [통합 분석 LLM] 혈액 검사 + 유전체 변이 데이터 종합 분석
+    path('ai/integrated-analysis/', IntegratedLLMAnalysisView.as_view(), name='integrated-llm-analysis')
 ]
