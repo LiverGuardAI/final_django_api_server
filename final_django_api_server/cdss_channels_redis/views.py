@@ -1,11 +1,27 @@
+import os
+import uuid
+import hashlib
+import mimetypes
+
+# PIL은 선택적 - 이미지 크기 추출용
+try:
+    from PIL import Image
+    HAS_PIL = True
+except ImportError:
+    HAS_PIL = False
+
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
+from rest_framework.parsers import MultiPartParser, FormParser
+from rest_framework.views import APIView
 from django.contrib.auth import get_user_model
 from django.db.models import Q, Prefetch
+from django.conf import settings
+from django.http import FileResponse, Http404
 
-from .models import Conversation, ConversationMember, Message
+from .models import Conversation, ConversationMember, Message, File, MessageFile
 from .serializers import (
     ConversationListSerializer,
     ConversationDetailSerializer,
@@ -13,11 +29,15 @@ from .serializers import (
     CreateDMSerializer,
     SendMessageSerializer,
     UserListSerializer,
+    FileSerializer,
     get_user_display_name,
 )
 from .tasks import broadcast_chat_message, broadcast_read_receipt, broadcast_new_conversation
 
 User = get_user_model()
+
+# 최대 파일 크기 (50MB)
+MAX_FILE_SIZE = 50 * 1024 * 1024
 
 
 class ConversationViewSet(viewsets.ModelViewSet):
@@ -265,3 +285,191 @@ class UserListViewSet(viewsets.ReadOnlyModelViewSet):
                 queryset = queryset.filter(role=role)
 
         return queryset.order_by('username')
+
+
+class FileUploadView(APIView):
+    """파일 업로드 API"""
+    permission_classes = [IsAuthenticated]
+    parser_classes = [MultiPartParser, FormParser]
+
+    def post(self, request):
+        """파일 업로드 및 메시지 전송"""
+        conversation_id = request.data.get('conversation_id')
+        uploaded_file = request.FILES.get('file')
+        body = request.data.get('body', '')
+
+        if not conversation_id:
+            return Response(
+                {'error': 'conversation_id is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if not uploaded_file:
+            return Response(
+                {'error': 'file is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # 파일 크기 검증
+        if uploaded_file.size > MAX_FILE_SIZE:
+            return Response(
+                {'error': f'파일 크기가 너무 큽니다. 최대 {MAX_FILE_SIZE // (1024*1024)}MB'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # 대화방 확인
+        try:
+            conversation = Conversation.objects.get(conversation_id=conversation_id)
+        except Conversation.DoesNotExist:
+            return Response(
+                {'error': 'Conversation not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        # 멤버십 확인
+        if not conversation.members.filter(user=request.user).exists():
+            return Response(
+                {'error': 'Not a member of this conversation'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        # 파일 저장
+        file_ext = os.path.splitext(uploaded_file.name)[1].lower()
+        unique_name = f"{uuid.uuid4().hex}{file_ext}"
+
+        # chat_files 폴더에 저장
+        upload_dir = os.path.join(settings.MEDIA_ROOT, 'chat_files')
+        os.makedirs(upload_dir, exist_ok=True)
+
+        file_path = os.path.join(upload_dir, unique_name)
+        storage_key = f"chat_files/{unique_name}"
+
+        # 파일 저장 및 해시 계산
+        sha256_hash = hashlib.sha256()
+        with open(file_path, 'wb+') as destination:
+            for chunk in uploaded_file.chunks():
+                destination.write(chunk)
+                sha256_hash.update(chunk)
+
+        # MIME 타입 감지
+        mime_type = uploaded_file.content_type or mimetypes.guess_type(uploaded_file.name)[0] or 'application/octet-stream'
+
+        # 이미지 크기 확인 (PIL 설치된 경우만)
+        width, height = None, None
+        if HAS_PIL and mime_type.startswith('image/'):
+            try:
+                with Image.open(file_path) as img:
+                    width, height = img.size
+            except Exception:
+                pass
+
+        # File 모델 생성
+        file_obj = File.objects.create(
+            uploader=request.user,
+            storage_type='LOCAL',
+            storage_key=storage_key,
+            original_name=uploaded_file.name,
+            mime_type=mime_type,
+            size_bytes=uploaded_file.size,
+            width=width,
+            height=height,
+            checksum_sha256=sha256_hash.hexdigest()
+        )
+
+        # 메시지 타입 결정
+        if body.strip():
+            message_type = 'MIXED'
+        else:
+            message_type = 'FILE'
+
+        # 메시지 생성
+        message = Message.objects.create(
+            conversation=conversation,
+            sender=request.user,
+            body=body,
+            message_type=message_type
+        )
+
+        # MessageFile 연결
+        MessageFile.objects.create(
+            message=message,
+            file=file_obj,
+            sort_order=0
+        )
+
+        # 대화방 updated_at 갱신
+        conversation.save()
+
+        # WebSocket 브로드캐스트
+        group_name = f"chat_conversation_{conversation.conversation_id}"
+        file_data = FileSerializer(file_obj, context={'request': request}).data
+
+        message_data = {
+            'message_id': message.message_id,
+            'conversation_id': conversation.conversation_id,
+            'sender_id': request.user.user_id,
+            'sender_name': get_user_display_name(request.user),
+            'body': message.body,
+            'message_type': message.message_type,
+            'created_at': message.created_at.isoformat(),
+            'files': [file_data]
+        }
+
+        broadcast_chat_message.delay(group_name, message_data)
+
+        response_serializer = MessageSerializer(message, context={'request': request})
+        return Response(response_serializer.data, status=status.HTTP_201_CREATED)
+
+
+class FileDownloadView(APIView):
+    """파일 다운로드 API"""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, file_id):
+        """파일 다운로드"""
+        try:
+            file_obj = File.objects.get(file_id=file_id)
+        except File.DoesNotExist:
+            return Response(
+                {'error': '파일을 찾을 수 없습니다.'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        # 사용자 권한 확인 (파일이 속한 대화방의 멤버인지)
+        message_files = MessageFile.objects.filter(file=file_obj).select_related('message__conversation')
+        has_access = False
+        for mf in message_files:
+            if mf.message.conversation.members.filter(user=request.user).exists():
+                has_access = True
+                break
+
+        if not has_access:
+            return Response(
+                {'error': '접근 권한이 없습니다.'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        # 파일 존재 확인
+        if file_obj.storage_type == 'LOCAL':
+            file_path = os.path.join(settings.MEDIA_ROOT, file_obj.storage_key)
+            if not os.path.exists(file_path):
+                return Response(
+                    {'error': '존재하지 않는 파일입니다.', 'file_missing': True},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+
+            response = FileResponse(
+                open(file_path, 'rb'),
+                content_type=file_obj.mime_type
+            )
+            # 한글 파일명 처리
+            from urllib.parse import quote
+            encoded_name = quote(file_obj.original_name)
+            response['Content-Disposition'] = f"attachment; filename*=UTF-8''{encoded_name}"
+            return response
+        else:
+            # S3 처리 (추후 구현)
+            return Response(
+                {'error': 'S3 storage not implemented'},
+                status=status.HTTP_501_NOT_IMPLEMENTED
+            )

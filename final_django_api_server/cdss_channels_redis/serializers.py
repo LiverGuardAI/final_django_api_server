@@ -36,16 +36,56 @@ class UserSimpleSerializer(serializers.ModelSerializer):
         return get_user_display_name(obj)
 
 
+class FileSerializer(serializers.ModelSerializer):
+    """파일 Serializer"""
+    download_url = serializers.SerializerMethodField()
+    is_image = serializers.SerializerMethodField()
+    is_video = serializers.SerializerMethodField()
+    file_exists = serializers.SerializerMethodField()
+
+    class Meta:
+        model = File
+        fields = [
+            'file_id', 'original_name', 'mime_type', 'size_bytes',
+            'width', 'height', 'download_url', 'is_image', 'is_video',
+            'file_exists', 'created_at'
+        ]
+
+    def get_download_url(self, obj):
+        request = self.context.get('request')
+        if request:
+            return request.build_absolute_uri(f'/api/chat/files/{obj.file_id}/download/')
+        return f'/api/chat/files/{obj.file_id}/download/'
+
+    def get_is_image(self, obj):
+        return obj.mime_type.startswith('image/') if obj.mime_type else False
+
+    def get_is_video(self, obj):
+        return obj.mime_type.startswith('video/') if obj.mime_type else False
+
+    def get_file_exists(self, obj):
+        """파일이 실제로 존재하는지 확인"""
+        import os
+        from django.conf import settings
+        if obj.storage_type == 'LOCAL':
+            file_path = os.path.join(settings.MEDIA_ROOT, obj.storage_key)
+            return os.path.exists(file_path)
+        # S3의 경우 항상 True (실제로는 S3 API로 확인 필요)
+        return True
+
+
 class MessageSerializer(serializers.ModelSerializer):
     """메시지 Serializer"""
     sender = UserSimpleSerializer(read_only=True)
     is_mine = serializers.SerializerMethodField()
+    files = serializers.SerializerMethodField()
 
     class Meta:
         model = Message
         fields = [
             'message_id', 'conversation', 'sender', 'body',
-            'message_type', 'created_at', 'edited_at', 'is_deleted', 'is_mine'
+            'message_type', 'created_at', 'edited_at', 'is_deleted', 'is_mine',
+            'files'
         ]
         read_only_fields = ['message_id', 'sender', 'created_at', 'edited_at']
 
@@ -54,6 +94,12 @@ class MessageSerializer(serializers.ModelSerializer):
         if request and request.user:
             return obj.sender_id == request.user.user_id
         return False
+
+    def get_files(self, obj):
+        """첨부 파일 목록"""
+        message_files = obj.attached_files.select_related('file').all()
+        files = [mf.file for mf in message_files]
+        return FileSerializer(files, many=True, context=self.context).data
 
 
 class ConversationMemberSerializer(serializers.ModelSerializer):

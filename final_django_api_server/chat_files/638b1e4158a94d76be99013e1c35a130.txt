@@ -1,0 +1,28 @@
+# flutter .env 파일 
+
+UPSTAGE_API_KEY=up_c4GYWf9WU9LA9yFtUcP9pkuTgnThI
+UPSTAGE_API_URL=https://api.upstage.ai/v1/document-digitization
+DUR_API_KEY=7878af6bb15e6c8613f5c320e3553875f9cd387b5da4f01a1d5887c630cb4807
+DUR_BASE_URL=https://apis.data.go.kr/1471000/DURPrdlstInfoService03
+PILL_IMAGE_URL=https://apis.data.go.kr/1471000/MdcinGrnIdntfcInfoService03/getMdcinGrnIdntfcInfoList03
+HOLIDAY_API_URL=http://apis.data.go.kr/B090041/openapi/service/SpcdeInfoService/getRestDeInfo
+
+# Django API Server - Development
+# 폰에 직접 연결은 localhost
+# 에뮬은 10.0.2.2
+API_BASE_URL=http://localhost:8000
+# API_BASE_URL=http://10.0.2.2:8000
+# API_BASE_URL=http://34.67.62.238:8000
+
+
+# Kakao Map Plugin BaseUrl
+# 폰에 직접 연결은 localhost
+# 에뮬은 10.0.2.2
+KAKAO_BASE_URL=http://localhost
+# KAKAO_BASE_URL=http://10.0.2.2
+# KAKAO_BASE_URL=http://34.67.62.238
+
+# localhost 접속을 위한 ADB 포트 포워딩 명령어
+# ADB 포트 포워딩 명령어를 실행 - 내 실제 폰으로 진행할 때
+# 터미널 주소 c:/ 설정
+# ''C:\Users\사용자\AppData\Local\Android\Sdk\platform-tools\adb.exe' -s R3CX109G19V reverse tcp:8000 tcp:8000

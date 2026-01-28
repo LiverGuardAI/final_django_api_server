@@ -1,6 +1,6 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
-from .views import ConversationViewSet, UserListViewSet
+from .views import ConversationViewSet, UserListViewSet, FileUploadView, FileDownloadView
 
 router = DefaultRouter()
 router.register(r'conversations', ConversationViewSet, basename='conversation')
@@ -8,6 +8,8 @@ router.register(r'chat-users', UserListViewSet, basename='chat-user')
 
 urlpatterns = [
     path('', include(router.urls)),
+    path('files/upload/', FileUploadView.as_view(), name='file-upload'),
+    path('files/<int:file_id>/download/', FileDownloadView.as_view(), name='file-download'),
 ]
 
 # API Endpoints:
@@ -19,3 +21,5 @@ urlpatterns = [
 # POST   /api/chat/conversations/{id}/mark_read/ - 읽음 처리
 # GET    /api/chat/chat-users/             - 채팅 가능 사용자 목록
 # GET    /api/chat/chat-users/?department=소화기내과  - 부서별 필터링
+# POST   /api/chat/files/upload/           - 파일 업로드 (conversation_id, file, body?)
+# GET    /api/chat/files/{id}/download/    - 파일 다운로드
