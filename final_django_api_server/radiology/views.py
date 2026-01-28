@@ -8,7 +8,7 @@ from django.utils import timezone
 from django.db import transaction
 from accounts.permissions import IsRadiologist, IsDoctorOrRadiologist
 from doctor.models import Patient, Encounter
-from .models import DICOMStudy, DICOMSeries
+from .models import DICOMStudy, DICOMSeries, CTReport
 from .serializers import (
     PatientWaitlistSerializer,
     RadiologyQueueSerializer,
@@ -1297,6 +1297,24 @@ class CTReportCreateView(APIView):
     """CT 보고서 저장 API"""
     permission_classes = [IsDoctorOrRadiologist]
 
+    def get(self, request):
+        series_instance_uid = (
+            request.query_params.get('series_instance_uid')
+            or request.query_params.get('seriesInstanceUID')
+            or request.query_params.get('seriesinstanceuid')
+        )
+        if not series_instance_uid:
+            return Response(
+                {'error': 'series_instance_uid is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        reports = CTReport.objects.filter(
+            series_instance_uid=series_instance_uid
+        ).order_by('-created_at')
+        serializer = CTReportSerializer(reports, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
     def post(self, request):
         series_instance_uid = (
             request.data.get('series_instance_uid')
@@ -1304,6 +1322,7 @@ class CTReportCreateView(APIView):
             or request.data.get('seriesinstanceuid')
         )
         report_text = request.data.get('report_text') or request.data.get('report')
+        tumor_analysis = request.data.get('tumor_analysis')
 
         if not series_instance_uid:
             return Response(
@@ -1319,6 +1338,7 @@ class CTReportCreateView(APIView):
         serializer = CTReportSerializer(data={
             'series_instance_uid': series_instance_uid,
             'report_text': report_text,
+            'tumor_analysis': tumor_analysis,
         })
         if serializer.is_valid():
             report = serializer.save()

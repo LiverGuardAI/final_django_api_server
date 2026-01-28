@@ -40,7 +40,7 @@ for i in range(10):
         measured_at=measured_date,
         sbp=sbp,
         dbp=dbp,
-        medical_record=None  # medical_record는 null로 설정
+        encounter=None  # encounter는 null로 설정
     )
     created_count += 1
     print(f"✅ {created_count}. {measured_date} - SBP: {sbp}, DBP: {dbp}")

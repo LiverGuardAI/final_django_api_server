@@ -433,10 +433,10 @@ class VitalData(models.Model):
     heart_rate = models.IntegerField(blank=True, null=True)  # 심박수 (bpm)
     temperature = models.DecimalField(max_digits=4, decimal_places=1, blank=True, null=True)  # 체온 (°C)
     patient = models.ForeignKey(Patient, on_delete=models.CASCADE, db_column='patient_id')
-    medical_record = models.ForeignKey(
-        MedicalRecord,
+    encounter = models.ForeignKey(
+        Encounter,
         on_delete=models.CASCADE,
-        db_column='record_id',
+        db_column='encounter_id',
         null=True,
         blank=True
     )
@@ -464,7 +464,7 @@ class LabResult(models.Model):
     measured_at = models.DateTimeField(blank=True, null=True)
 
     patient = models.ForeignKey(Patient, on_delete=models.CASCADE, db_column='patient_id')
-    medical_record = models.ForeignKey(MedicalRecord, on_delete=models.SET_NULL, null=True, blank=True, db_column='record_id')
+    encounter = models.ForeignKey(Encounter, on_delete=models.SET_NULL, null=True, blank=True, db_column='encounter_id')
 
     class Meta:
         db_table = 'hospital"."lab_results'
@@ -490,10 +490,10 @@ class HCCDiagnosis(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     patient = models.ForeignKey(Patient, on_delete=models.CASCADE, db_column='patient_id')
-    medical_record = models.ForeignKey(
-        MedicalRecord,
+    encounter = models.ForeignKey(
+        Encounter,
         on_delete=models.SET_NULL,
-        db_column='record_id',
+        db_column='encounter_id',
         null=True,
         blank=True
     )

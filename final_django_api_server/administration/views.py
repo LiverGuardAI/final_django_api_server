@@ -1307,7 +1307,7 @@ class CompleteVitalOrPhysicalView(APIView):
                 # 바이탈 데이터 저장
                 VitalData.objects.create(
                     patient=patient,
-                    medical_record=medical_record,
+                    encounter=encounter,
                     measured_at=timezone.now().date(),
                     sbp=lab_data.get('systolic_bp'),
                     dbp=lab_data.get('diastolic_bp'),

@@ -87,6 +87,7 @@ class CTReportSerializer(serializers.ModelSerializer):
             'report_id',
             'series_instance_uid',
             'report_text',
+            'tumor_analysis',
             'created_at',
             'updated_at',
         ]
