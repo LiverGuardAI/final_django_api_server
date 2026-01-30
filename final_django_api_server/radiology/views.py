@@ -8,16 +8,19 @@ from django.utils import timezone
 from django.db import transaction
 from accounts.permissions import IsRadiologist, IsDoctorOrRadiologist
 from doctor.models import Patient, Encounter
-from .models import DICOMStudy, DICOMSeries, CTReport
+from .models import DICOMStudy, DICOMSeries, CTReport, SegmentationMaskClass
 from .serializers import (
     PatientWaitlistSerializer,
     RadiologyQueueSerializer,
     EncounterWaitlistSerializer,
     CTReportSerializer,
 )
+import base64
 import io
 import math
 import os
+import shutil
+import tempfile
 import zipfile
 from collections import deque
 
@@ -51,6 +54,79 @@ def _convert_numpy_types(obj):
     if isinstance(obj, list):
         return [_convert_numpy_types(item) for item in obj]
     return obj
+
+
+def _get_image_orientation_vectors(orientation, warnings: list[str]):
+    if not orientation or len(orientation) < 6:
+        warnings.append('ImageOrientationPatient missing; using default axis directions.')
+        return (
+            np.array([1.0, 0.0, 0.0], dtype=float),
+            np.array([0.0, 1.0, 0.0], dtype=float),
+            np.array([0.0, 0.0, 1.0], dtype=float),
+        )
+
+    try:
+        row_dir = np.array(orientation[:3], dtype=float)
+        col_dir = np.array(orientation[3:6], dtype=float)
+    except Exception:
+        warnings.append('Invalid ImageOrientationPatient; using default axis directions.')
+        return (
+            np.array([1.0, 0.0, 0.0], dtype=float),
+            np.array([0.0, 1.0, 0.0], dtype=float),
+            np.array([0.0, 0.0, 1.0], dtype=float),
+        )
+
+    row_norm = np.linalg.norm(row_dir)
+    col_norm = np.linalg.norm(col_dir)
+    if row_norm == 0 or col_norm == 0:
+        warnings.append('Degenerate ImageOrientationPatient; using default axis directions.')
+        return (
+            np.array([1.0, 0.0, 0.0], dtype=float),
+            np.array([0.0, 1.0, 0.0], dtype=float),
+            np.array([0.0, 0.0, 1.0], dtype=float),
+        )
+
+    row_dir = row_dir / row_norm
+    col_dir = col_dir / col_norm
+    slice_dir = np.cross(row_dir, col_dir)
+    slice_norm = np.linalg.norm(slice_dir)
+    if slice_norm == 0:
+        warnings.append('ImageOrientationPatient cross-product invalid; using default axis directions.')
+        return (
+            np.array([1.0, 0.0, 0.0], dtype=float),
+            np.array([0.0, 1.0, 0.0], dtype=float),
+            np.array([0.0, 0.0, 1.0], dtype=float),
+        )
+
+    slice_dir = slice_dir / slice_norm
+    return row_dir, col_dir, slice_dir
+
+
+def _voxel_to_world(centroid_voxel: dict, spacing: dict, origin, orientation, warnings: list[str]):
+    try:
+        origin_vec = np.array(origin, dtype=float)
+        if origin_vec.size != 3:
+            raise ValueError('Invalid origin size')
+    except Exception:
+        warnings.append('ImagePositionPatient missing or invalid; using spacing-only coordinates.')
+        return {
+            'z': centroid_voxel['z'] * spacing['z'],
+            'y': centroid_voxel['y'] * spacing['y'],
+            'x': centroid_voxel['x'] * spacing['x'],
+        }
+
+    row_dir, col_dir, slice_dir = _get_image_orientation_vectors(orientation, warnings)
+    world = (
+        origin_vec
+        + row_dir * (centroid_voxel['x'] * spacing['x'])
+        + col_dir * (centroid_voxel['y'] * spacing['y'])
+        + slice_dir * (centroid_voxel['z'] * spacing['z'])
+    )
+    return {
+        'x': float(world[0]),
+        'y': float(world[1]),
+        'z': float(world[2]),
+    }
 
 
 def _download_series_archive(series_id: str) -> bytes:
@@ -99,6 +175,7 @@ def _load_mask_volume_from_zip(zip_bytes: bytes) -> tuple[np.ndarray, dict, dict
 
             instance_number = getattr(dataset, 'InstanceNumber', None)
             image_position = getattr(dataset, 'ImagePositionPatient', None)
+            image_orientation = getattr(dataset, 'ImageOrientationPatient', None)
             pixel_spacing = getattr(dataset, 'PixelSpacing', None)
             slice_thickness = getattr(dataset, 'SliceThickness', None)
             spacing_between = getattr(dataset, 'SpacingBetweenSlices', None)
@@ -108,6 +185,7 @@ def _load_mask_volume_from_zip(zip_bytes: bytes) -> tuple[np.ndarray, dict, dict
                     'array': frame,
                     'instance_number': instance_number if instance_number is not None else frame_index,
                     'image_position': image_position,
+                    'image_orientation': image_orientation,
                     'pixel_spacing': pixel_spacing,
                     'slice_thickness': slice_thickness,
                     'spacing_between_slices': spacing_between,
@@ -117,8 +195,25 @@ def _load_mask_volume_from_zip(zip_bytes: bytes) -> tuple[np.ndarray, dict, dict
         raise ValueError('No pixel data found in DICOM archive')
 
     positions = [s['image_position'] for s in slices if s['image_position'] is not None]
+    orientation_ref = None
+    for s in slices:
+        orientation = s.get('image_orientation')
+        if orientation and len(orientation) >= 6:
+            orientation_ref = orientation
+            break
+
+    slice_dir = None
+    if orientation_ref:
+        _, _, slice_dir = _get_image_orientation_vectors(orientation_ref, warnings)
+
     if len(positions) == len(slices):
-        slices.sort(key=lambda s: float(s['image_position'][2]))
+        if slice_dir is not None:
+            for s in slices:
+                pos = np.array(s['image_position'], dtype=float)
+                s['slice_position'] = float(np.dot(pos, slice_dir))
+            slices.sort(key=lambda s: s.get('slice_position', 0.0))
+        else:
+            slices.sort(key=lambda s: float(s['image_position'][2]))
     elif all(s['instance_number'] is not None for s in slices):
         slices.sort(key=lambda s: int(s['instance_number']))
 
@@ -160,11 +255,23 @@ def _load_mask_volume_from_zip(zip_bytes: bytes) -> tuple[np.ndarray, dict, dict
             except Exception:
                 continue
         if len(numeric_positions) >= 2:
-            diffs = [
-                float(np.linalg.norm(numeric_positions[i + 1] - numeric_positions[i]))
-                for i in range(len(numeric_positions) - 1)
-                if np.linalg.norm(numeric_positions[i + 1] - numeric_positions[i]) > 0
-            ]
+            if slice_dir is not None:
+                slice_positions = [
+                    float(np.dot(pos, slice_dir))
+                    for pos in numeric_positions
+                ]
+                slice_positions.sort()
+                diffs = [
+                    abs(slice_positions[i + 1] - slice_positions[i])
+                    for i in range(len(slice_positions) - 1)
+                    if abs(slice_positions[i + 1] - slice_positions[i]) > 0
+                ]
+            else:
+                diffs = [
+                    float(np.linalg.norm(numeric_positions[i + 1] - numeric_positions[i]))
+                    for i in range(len(numeric_positions) - 1)
+                    if np.linalg.norm(numeric_positions[i + 1] - numeric_positions[i]) > 0
+                ]
             if diffs:
                 spacing_z = float(np.median(diffs))
 
@@ -175,10 +282,30 @@ def _load_mask_volume_from_zip(zip_bytes: bytes) -> tuple[np.ndarray, dict, dict
     volume = np.stack([s['array'] for s in slices], axis=0)
     volume = volume.astype(np.int32, copy=False)
 
+    origin = None
+    orientation = None
+    if slices:
+        raw_origin = slices[0].get('image_position')
+        raw_orientation = slices[0].get('image_orientation')
+        try:
+            origin = [float(value) for value in raw_origin] if raw_origin is not None else None
+        except Exception:
+            origin = None
+            warnings.append('Invalid ImagePositionPatient; omitting origin metadata.')
+        try:
+            orientation = (
+                [float(value) for value in raw_orientation] if raw_orientation is not None else None
+            )
+        except Exception:
+            orientation = None
+            warnings.append('Invalid ImageOrientationPatient; omitting orientation metadata.')
+
     metadata = {
         'slice_count': len(slices),
         'rows': int(volume.shape[1]),
         'cols': int(volume.shape[2]),
+        'origin': origin,
+        'orientation': orientation,
     }
 
     spacing = {
@@ -188,6 +315,103 @@ def _load_mask_volume_from_zip(zip_bytes: bytes) -> tuple[np.ndarray, dict, dict
     }
 
     return volume, spacing, metadata, warnings
+
+
+def _load_mask_datasets_from_zip(zip_bytes: bytes) -> tuple[list[dict], list[str]]:
+    warnings: list[str] = []
+    slices = []
+
+    with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zip_ref:
+        entries = [
+            entry for entry in zip_ref.infolist()
+            if entry.filename.lower().endswith(('.dcm', '.dicom'))
+        ]
+
+        if not entries:
+            raise ValueError('No DICOM files found in archive')
+
+        for entry in entries:
+            with zip_ref.open(entry) as dicom_file:
+                file_content = dicom_file.read()
+            dataset = pydicom.dcmread(io.BytesIO(file_content), force=True)
+            if not hasattr(dataset, 'PixelData'):
+                continue
+
+            try:
+                pixel_array = dataset.pixel_array
+            except Exception:
+                continue
+
+            if pixel_array.ndim != 2:
+                raise ValueError('Multi-frame DICOM masks are not supported for editing yet')
+
+            instance_number = getattr(dataset, 'InstanceNumber', None)
+            image_position = getattr(dataset, 'ImagePositionPatient', None)
+
+            slices.append({
+                'dataset': dataset,
+                'instance_number': instance_number,
+                'image_position': image_position,
+            })
+
+    if not slices:
+        raise ValueError('No pixel data found in DICOM archive')
+
+    positions = [s['image_position'] for s in slices if s['image_position'] is not None]
+    if len(positions) == len(slices):
+        slices.sort(key=lambda s: float(s['image_position'][2]))
+    elif all(s['instance_number'] is not None for s in slices):
+        slices.sort(key=lambda s: int(s['instance_number']))
+
+    return slices, warnings
+
+
+def _decode_mask_slice_base64(payload: str, width: int, height: int) -> np.ndarray:
+    raw = base64.b64decode(payload)
+    array = np.frombuffer(raw, dtype=np.uint16)
+    if array.size != width * height:
+        raise ValueError('Mask slice size mismatch')
+    return array.reshape((height, width))
+
+
+def _upload_dicom_dir_to_orthanc(dicom_dir: str) -> tuple[str | None, list[str]]:
+    instance_ids: list[str] = []
+    series_id: str | None = None
+    dicom_files = sorted(
+        [
+            os.path.join(dicom_dir, name)
+            for name in os.listdir(dicom_dir)
+            if name.lower().endswith(('.dcm', '.dicom'))
+        ]
+    )
+
+    if not dicom_files:
+        raise ValueError('No DICOM files to upload')
+
+    for path in dicom_files:
+        with open(path, 'rb') as handle:
+            file_content = handle.read()
+
+        orthanc_response = requests.post(
+            f'{ORTHANC_BASE_URL}/instances',
+            data=file_content,
+            headers={'Content-Type': 'application/dicom'},
+            auth=ORTHANC_AUTH,
+            timeout=30
+        )
+
+        if orthanc_response.status_code != 200:
+            raise ValueError(f'Orthanc upload failed: {orthanc_response.text}')
+
+        payload = orthanc_response.json()
+        instance_id = payload.get('ID')
+        parent_series = payload.get('ParentSeries')
+        if instance_id:
+            instance_ids.append(instance_id)
+        if parent_series:
+            series_id = parent_series
+
+    return series_id, instance_ids
 
 
 NEIGHBOR_OFFSETS_6 = [
@@ -1168,11 +1392,13 @@ class TumorAnalysisView(APIView):
                 'y': component['sum'][1] / voxel_count,
                 'x': component['sum'][2] / voxel_count,
             }
-            centroid_mm = {
-                'z': centroid_voxel['z'] * spacing['z'],
-                'y': centroid_voxel['y'] * spacing['y'],
-                'x': centroid_voxel['x'] * spacing['x'],
-            }
+            centroid_mm = _voxel_to_world(
+                centroid_voxel,
+                spacing,
+                metadata.get('origin'),
+                metadata.get('orientation'),
+                warnings,
+            )
 
             component_mask = _component_mask_from_coords(component['coords'], component['bbox'])
             surface_area_mm2 = _compute_surface_area(component_mask, spacing)
@@ -1291,6 +1517,310 @@ class TumorAnalysisView(APIView):
         }
 
         return Response(_convert_numpy_types(response_data), status=status.HTTP_200_OK)
+
+
+class SegmentationMaskClassView(APIView):
+    """세그멘테이션 마스크 클래스 조회/추가 API"""
+    permission_classes = [IsDoctorOrRadiologist]
+
+    def get(self, request):
+        mask_series_id = (
+            request.query_params.get('mask_series_id')
+            or request.query_params.get('maskSeriesId')
+            or request.query_params.get('series_id')
+        )
+
+        if not mask_series_id:
+            return Response(
+                {'error': 'mask_series_id is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            archive_bytes = _download_series_archive(mask_series_id)
+            volume, _, _, warnings = _load_mask_volume_from_zip(archive_bytes)
+        except ValueError as exc:
+            return Response({'error': str(exc)}, status=status.HTTP_404_NOT_FOUND)
+        except Exception as exc:
+            return Response(
+                {'error': 'Failed to load mask series', 'details': str(exc)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+        unique_values = _normalize_label_values(set(np.unique(volume).tolist()))
+        classes = SegmentationMaskClass.objects.filter(
+            mask_series_id=mask_series_id
+        ).order_by('label_value')
+
+        class_map = {cls.label_value: cls for cls in classes}
+        response_classes = []
+        seen_values = set()
+
+        for value in unique_values:
+            cls = class_map.get(value)
+            if cls:
+                response_classes.append({
+                    'label_value': cls.label_value,
+                    'label_name': cls.label_name,
+                    'color': cls.color,
+                    'is_present': True,
+                    'is_custom': True,
+                })
+            else:
+                response_classes.append({
+                    'label_value': value,
+                    'label_name': 'Background' if value == 0 else f'Class {value}',
+                    'color': None,
+                    'is_present': True,
+                    'is_custom': False,
+                })
+            seen_values.add(value)
+
+        for cls in classes:
+            if cls.label_value in seen_values:
+                continue
+            response_classes.append({
+                'label_value': cls.label_value,
+                'label_name': cls.label_name,
+                'color': cls.color,
+                'is_present': False,
+                'is_custom': True,
+            })
+
+        return Response({
+            'success': True,
+            'mask_series_id': mask_series_id,
+            'unique_values': unique_values,
+            'classes': response_classes,
+            'warnings': _dedupe_warnings(warnings),
+        }, status=status.HTTP_200_OK)
+
+    def post(self, request):
+        mask_series_id = (
+            request.data.get('mask_series_id')
+            or request.data.get('maskSeriesId')
+            or request.data.get('series_id')
+        )
+        label_name = request.data.get('label_name') or request.data.get('labelName')
+        label_value = request.data.get('label_value') or request.data.get('labelValue')
+        color = request.data.get('color')
+
+        if not mask_series_id:
+            return Response(
+                {'error': 'mask_series_id is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        if not label_name:
+            return Response(
+                {'error': 'label_name is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        existing_values = set(
+            SegmentationMaskClass.objects.filter(mask_series_id=mask_series_id)
+            .values_list('label_value', flat=True)
+        )
+
+        if label_value is None or label_value == '':
+            try:
+                archive_bytes = _download_series_archive(mask_series_id)
+                volume, _, _, _ = _load_mask_volume_from_zip(archive_bytes)
+                unique_values = _normalize_label_values(set(np.unique(volume).tolist()))
+            except Exception:
+                unique_values = []
+
+            used_values = existing_values.union(set(unique_values))
+            used_values.discard(0)
+            label_value = max(used_values) + 1 if used_values else 1
+        else:
+            try:
+                label_value = int(label_value)
+            except (TypeError, ValueError):
+                return Response(
+                    {'error': 'label_value must be an integer'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+        if label_value == 0:
+            return Response(
+                {'error': 'label_value 0 is reserved for background'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if label_value in existing_values:
+            return Response(
+                {'error': 'label_value already exists for this mask'},
+                status=status.HTTP_409_CONFLICT
+            )
+
+        created = SegmentationMaskClass.objects.create(
+            mask_series_id=mask_series_id,
+            label_value=label_value,
+            label_name=label_name,
+            color=color
+        )
+
+        return Response({
+            'success': True,
+            'class': {
+                'label_value': created.label_value,
+                'label_name': created.label_name,
+                'color': created.color,
+                'is_present': False,
+                'is_custom': True,
+            }
+        }, status=status.HTTP_201_CREATED)
+
+    def delete(self, request):
+        mask_series_id = (
+            request.query_params.get('mask_series_id')
+            or request.query_params.get('maskSeriesId')
+            or request.query_params.get('series_id')
+        )
+        label_value = request.query_params.get('label_value') or request.query_params.get('labelValue')
+
+        if not mask_series_id:
+            return Response(
+                {'error': 'mask_series_id is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        if label_value is None:
+            return Response(
+                {'error': 'label_value is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            label_value = int(label_value)
+        except (TypeError, ValueError):
+            return Response(
+                {'error': 'label_value must be an integer'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if label_value == 0:
+            return Response(
+                {'error': 'label_value 0 cannot be deleted'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        deleted, _ = SegmentationMaskClass.objects.filter(
+            mask_series_id=mask_series_id,
+            label_value=label_value
+        ).delete()
+
+        if deleted == 0:
+            return Response(
+                {'error': 'mask class not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        return Response({'success': True}, status=status.HTTP_200_OK)
+
+
+class MaskEditSaveView(APIView):
+    """세그멘테이션 마스크 수정 저장 API"""
+    permission_classes = [IsDoctorOrRadiologist]
+
+    def post(self, request):
+        mask_series_id = (
+            request.data.get('mask_series_id')
+            or request.data.get('maskSeriesId')
+            or request.data.get('series_id')
+        )
+        edited_slices = request.data.get('edited_slices') or request.data.get('editedSlices') or []
+        overwrite = request.data.get('overwrite', True)
+
+        if not mask_series_id:
+            return Response(
+                {'error': 'mask_series_id is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        if not isinstance(edited_slices, list) or len(edited_slices) == 0:
+            return Response(
+                {'error': 'edited_slices is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            archive_bytes = _download_series_archive(mask_series_id)
+            slices, warnings = _load_mask_datasets_from_zip(archive_bytes)
+        except ValueError as exc:
+            return Response({'error': str(exc)}, status=status.HTTP_404_NOT_FOUND)
+        except Exception as exc:
+            return Response(
+                {'error': 'Failed to load mask series', 'details': str(exc)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+        total_slices = len(slices)
+        try:
+            for entry in edited_slices:
+                slice_index = int(entry.get('slice_index'))
+                width = int(entry.get('width'))
+                height = int(entry.get('height'))
+                pixels = entry.get('pixels')
+
+                if pixels is None:
+                    raise ValueError('pixels is required for each slice')
+                if slice_index < 0 or slice_index >= total_slices:
+                    raise ValueError('slice_index out of range')
+
+                edited_array = _decode_mask_slice_base64(pixels, width, height)
+                dataset = slices[slice_index]['dataset']
+
+                dataset.Rows = height
+                dataset.Columns = width
+                dataset.BitsAllocated = 16
+                dataset.BitsStored = 16
+                dataset.HighBit = 15
+                dataset.PixelRepresentation = 0
+                dataset.SamplesPerPixel = 1
+                dataset.PhotometricInterpretation = 'MONOCHROME2'
+                dataset.PixelData = edited_array.tobytes()
+        except Exception as exc:
+            return Response(
+                {'error': 'Failed to apply edited slices', 'details': str(exc)},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        temp_dir = tempfile.mkdtemp(prefix='mask_edit_')
+        try:
+            for idx, entry in enumerate(slices):
+                dataset = entry['dataset']
+                output_path = os.path.join(temp_dir, f'mask_{idx + 1:04d}.dcm')
+                dataset.save_as(output_path, write_like_original=False)
+
+            if overwrite:
+                try:
+                    requests.delete(
+                        f'{ORTHANC_BASE_URL}/series/{mask_series_id}',
+                        auth=ORTHANC_AUTH,
+                        timeout=30
+                    )
+                except Exception:
+                    warnings.append('Failed to delete existing mask series before upload.')
+
+            new_series_id, instance_ids = _upload_dicom_dir_to_orthanc(temp_dir)
+        except Exception as exc:
+            return Response(
+                {'error': 'Failed to save edited mask', 'details': str(exc)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
+        series_instance_uid = None
+        if slices:
+            series_instance_uid = getattr(slices[0]['dataset'], 'SeriesInstanceUID', None)
+
+        return Response({
+            'success': True,
+            'mask_series_id': new_series_id,
+            'series_instance_uid': series_instance_uid,
+            'instance_count': len(instance_ids),
+            'warnings': _dedupe_warnings(warnings),
+        }, status=status.HTTP_200_OK)
 
 
 class CTReportCreateView(APIView):

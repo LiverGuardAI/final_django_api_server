@@ -106,6 +106,25 @@ class RadiologyAIRun(models.Model):
         ]
 
 
+class SegmentationMaskClass(models.Model):
+    """세그멘테이션 마스크 클래스"""
+
+    class_id = models.AutoField(primary_key=True)
+    mask_series_id = models.CharField(max_length=64, db_index=True)
+    label_value = models.PositiveIntegerField()
+    label_name = models.CharField(max_length=64)
+    color = models.CharField(max_length=16, blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'hospital"."segmentation_mask_classes'
+        unique_together = (('mask_series_id', 'label_value'),)
+        indexes = [
+            models.Index(fields=['mask_series_id']),
+        ]
+
+
 class RadiologyToDoctorOrder(models.Model):
     """영상의학과 -> 의사 오더 (추가 촬영 제안 등)"""
 

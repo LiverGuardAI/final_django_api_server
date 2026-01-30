@@ -10,6 +10,8 @@ from .views import (
     EndFilmingView,
     ImagingStatsView,
     TumorAnalysisView,
+    SegmentationMaskClassView,
+    MaskEditSaveView,
     CTReportCreateView,
     get_radiologist_list,
 )
@@ -25,6 +27,8 @@ urlpatterns = [
     path('waitlist/end-filming/', EndFilmingView.as_view(), name='end_filming'),
     path('stats/', ImagingStatsView.as_view(), name='imaging_stats'),
     path('tumor-analysis/', TumorAnalysisView.as_view(), name='tumor_analysis'),
+    path('mask-classes/', SegmentationMaskClassView.as_view(), name='mask_classes'),
+    path('mask-save/', MaskEditSaveView.as_view(), name='mask_save'),
     path('ct-reports/', CTReportCreateView.as_view(), name='ct_report_create'),
     path('list/', get_radiologist_list, name='radiologist_list'),
 ]
