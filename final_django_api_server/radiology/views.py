@@ -358,10 +358,10 @@ def _load_mask_datasets_from_zip(zip_bytes: bytes) -> tuple[list[dict], list[str
         raise ValueError('No pixel data found in DICOM archive')
 
     positions = [s['image_position'] for s in slices if s['image_position'] is not None]
-    if len(positions) == len(slices):
-        slices.sort(key=lambda s: float(s['image_position'][2]))
-    elif all(s['instance_number'] is not None for s in slices):
+    if all(s['instance_number'] is not None for s in slices):
         slices.sort(key=lambda s: int(s['instance_number']))
+    elif len(positions) == len(slices):
+        slices.sort(key=lambda s: float(s['image_position'][2]))
 
     return slices, warnings
 
@@ -1785,9 +1785,12 @@ class MaskEditSaveView(APIView):
             )
 
         temp_dir = tempfile.mkdtemp(prefix='mask_edit_')
+        new_series_uid = pydicom.uid.generate_uid()
         try:
             for idx, entry in enumerate(slices):
                 dataset = entry['dataset']
+                dataset.SeriesInstanceUID = new_series_uid
+                dataset.SOPInstanceUID = pydicom.uid.generate_uid()
                 output_path = os.path.join(temp_dir, f'mask_{idx + 1:04d}.dcm')
                 dataset.save_as(output_path, write_like_original=False)
 
