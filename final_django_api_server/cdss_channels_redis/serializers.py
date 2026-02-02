@@ -6,17 +6,27 @@ User = get_user_model()
 
 
 def get_user_display_name(user):
-    """사용자의 실제 이름 반환 (역할별 모델에서 조회)"""
+    """사용자의 실제 이름 반환 (employee_no로 역할별 모델에서 조회)"""
     if not user:
         return None
 
     try:
+        # employee_no (username)로 직접 조회하여 FK 연결 문제 방지
         if user.role == 'DOCTOR':
-            return user.doctor.name
+            from doctor.models import Doctor
+            doctor = Doctor.objects.filter(employee_no=user.username).first()
+            if doctor and doctor.name:
+                return doctor.name
         elif user.role == 'RADIOLOGIST':
-            return user.radiology.name
+            from radiology.models import Radiology
+            radiology = Radiology.objects.filter(employee_no=user.username).first()
+            if radiology and radiology.name:
+                return radiology.name
         elif user.role == 'CLERK':
-            return user.administration.name
+            from administration.models import Administration
+            administration = Administration.objects.filter(employee_no=user.username).first()
+            if administration and administration.name:
+                return administration.name
     except Exception:
         pass
 

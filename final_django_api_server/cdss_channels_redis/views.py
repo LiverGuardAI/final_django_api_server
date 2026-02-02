@@ -261,7 +261,16 @@ class UserListViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = UserListSerializer
 
     def get_queryset(self):
-        """의료진만 조회 (PATIENT 제외), 본인 제외 - 관련 모델 프리페치로 최적화"""
+        """의료진만 조회 (PATIENT 제외), 본인 제외 - 역할별 모델이 있는 사용자만"""
+        from doctor.models import Doctor
+        from radiology.models import Radiology
+        from administration.models import Administration
+
+        # 역할별 모델이 존재하는 employee_no 목록 조회
+        valid_doctor_usernames = set(Doctor.objects.values_list('employee_no', flat=True))
+        valid_radiology_usernames = set(Radiology.objects.values_list('employee_no', flat=True))
+        valid_admin_usernames = set(Administration.objects.values_list('employee_no', flat=True))
+
         queryset = User.objects.exclude(
             user_id=self.request.user.user_id
         ).exclude(
@@ -269,7 +278,7 @@ class UserListViewSet(viewsets.ReadOnlyModelViewSet):
         ).filter(
             is_active=True
         ).select_related(
-            'doctor', 'radiology', 'administration'  # 이름 조회용 역할별 모델 프리로드
+            'doctor', 'radiology', 'administration'
         )
 
         # 부서(역할) 필터링
@@ -284,7 +293,19 @@ class UserListViewSet(viewsets.ReadOnlyModelViewSet):
             if role:
                 queryset = queryset.filter(role=role)
 
-        return queryset.order_by('username')
+        # 역할별 모델이 존재하는 사용자만 필터링
+        valid_users = []
+        for user in queryset:
+            if user.role == 'DOCTOR' and user.username in valid_doctor_usernames:
+                valid_users.append(user.user_id)
+            elif user.role == 'RADIOLOGIST' and user.username in valid_radiology_usernames:
+                valid_users.append(user.user_id)
+            elif user.role == 'CLERK' and user.username in valid_admin_usernames:
+                valid_users.append(user.user_id)
+
+        return User.objects.filter(user_id__in=valid_users).select_related(
+            'doctor', 'radiology', 'administration'
+        ).order_by('username')
 
 
 class FileUploadView(APIView):
